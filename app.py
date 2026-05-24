@@ -1,46 +1,100 @@
 from pathlib import Path
-import re
 
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory
 from werkzeug.exceptions import HTTPException
-from werkzeug.utils import secure_filename
 
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+MAX_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024 * 1024
+
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_SIZE_BYTES
 
 UPLOAD_FOLDER = Path(app.root_path) / "uploads"
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 
 ALLOWED_EXTENSIONS = {
+    "7z",
+    "aac",
+    "ai",
+    "ape",
+    "avif",
+    "avi",
+    "bmp",
+    "bz2",
     "csv",
+    "doc",
+    "docx",
+    "eml",
+    "epub",
+    "flac",
     "gif",
+    "gz",
+    "heic",
+    "heif",
+    "ics",
     "jpeg",
     "jpg",
     "json",
+    "key",
+    "log",
+    "m4a",
     "md",
+    "mov",
+    "mp3",
+    "mp4",
+    "mpeg",
+    "mpg",
+    "numbers",
+    "ods",
+    "odt",
+    "ogg",
+    "pages",
     "pdf",
     "png",
+    "ppt",
+    "pptx",
+    "psd",
+    "rar",
+    "rtf",
+    "svg",
+    "tar",
+    "tif",
+    "tiff",
+    "tsv",
     "txt",
+    "wav",
+    "webm",
+    "webp",
+    "wma",
+    "wmv",
+    "xls",
+    "xlsx",
+    "xml",
+    "yaml",
+    "yml",
     "zip",
 }
-SAFE_FILENAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+BLOCKED_FILENAME_CHARS = {"/", "\\", "\x00"}
 
 
 def parse_upload_file(upload):
     if not upload or not upload.filename:
         abort(400, description="No file was selected.")
 
-    original_name = upload.filename
-    filename = secure_filename(original_name)
+    filename = upload.filename
 
-    if filename != original_name or not SAFE_FILENAME.fullmatch(filename):
-        abort(400, description="Use only letters, numbers, dots, underscores, and hyphens in filenames.")
+    if not filename.strip():
+        abort(400, description="Filenames must include at least one visible character.")
 
-    if "." not in filename:
+    if filename in {".", ".."} or any(char in filename for char in BLOCKED_FILENAME_CHARS):
+        abort(400, description="Filenames cannot include path separators.")
+
+    filename_for_extension = filename.rstrip()
+
+    if "." not in filename_for_extension:
         abort(400, description="Files must include an extension.")
 
-    extension = filename.rsplit(".", 1)[1].lower()
+    extension = filename_for_extension.rsplit(".", 1)[1].lower()
     if extension not in ALLOWED_EXTENSIONS:
         abort(400, description=f".{extension} files are not allowed.")
 
@@ -107,6 +161,15 @@ def download_file(filename):
         abort(404, description="File was not found.")
 
     return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+
+
+@app.delete("/api/files/<path:filename>")
+def delete_file(filename):
+    if filename not in list_uploaded_files():
+        abort(404, description="File was not found.")
+
+    (UPLOAD_FOLDER / filename).unlink()
+    return "", 204
 
 
 if __name__ == "__main__":
