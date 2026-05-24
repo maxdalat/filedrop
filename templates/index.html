@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Flask Webpage</title>
+    <title>Filedrop</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -13,14 +13,14 @@
       body {
         min-height: 100vh;
         margin: 0;
-        display: grid;
-        place-items: center;
         background: #f7f7f4;
         color: #1f2933;
       }
 
       main {
-        width: min(92vw, 560px);
+        width: min(92vw, 760px);
+        margin: 0 auto;
+        padding: 56px 0;
       }
 
       h1 {
@@ -35,6 +35,18 @@
         line-height: 1.6;
       }
 
+      form {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        margin: 28px 0;
+      }
+
+      input[type="file"] {
+        max-width: 100%;
+      }
+
       button {
         border: 0;
         border-radius: 8px;
@@ -45,34 +57,136 @@
         cursor: pointer;
       }
 
-      pre {
-        min-height: 48px;
-        margin-top: 18px;
+      button:disabled {
+        cursor: progress;
+        opacity: 0.72;
+      }
+
+      .status {
+        min-height: 24px;
+        margin: 0 0 18px;
+        font-weight: 650;
+      }
+
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        border-top: 1px solid #d1d5db;
+      }
+
+      li {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
         padding: 16px;
-        border-radius: 8px;
-        background: #111827;
-        color: #f9fafb;
-        overflow-x: auto;
+        border-bottom: 1px solid #d1d5db;
+      }
+
+      a {
+        color: #14532d;
+        font-weight: 700;
+      }
+
+      .empty {
+        display: block;
+        padding: 16px 0;
+        color: #5b6472;
+      }
+
+      .empty-list {
+        border-top: 0;
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>It works.</h1>
-      <p>This page is served by Flask, and the button calls the Flask API in the same container.</p>
-      <button type="button" id="load-api">Call API</button>
-      <pre id="api-output">Waiting...</pre>
+      <h1>Filedrop</h1>
+      <p>Upload a file, view the files in the upload folder, and download them again.</p>
+
+      <form id="upload-form">
+        <input type="file" name="file" id="file-input" required>
+        <button type="submit" id="upload-button">Upload</button>
+      </form>
+
+      <p class="status" id="status"></p>
+      <ul id="file-list"></ul>
     </main>
 
     <script>
-      const output = document.querySelector("#api-output");
+      const form = document.querySelector("#upload-form");
+      const input = document.querySelector("#file-input");
+      const button = document.querySelector("#upload-button");
+      const status = document.querySelector("#status");
+      const list = document.querySelector("#file-list");
 
-      document.querySelector("#load-api").addEventListener("click", async () => {
-        output.textContent = "Loading...";
-        const response = await fetch("/api/hello");
+      async function loadFiles() {
+        const response = await fetch("/api/files");
         const data = await response.json();
-        output.textContent = JSON.stringify(data, null, 2);
+
+        list.innerHTML = "";
+        list.className = "";
+
+        if (!data.files.length) {
+          const empty = document.createElement("li");
+          empty.className = "empty";
+          empty.textContent = "No files uploaded yet.";
+          list.className = "empty-list";
+          list.append(empty);
+          return;
+        }
+
+        for (const filename of data.files) {
+          const item = document.createElement("li");
+          const name = document.createElement("span");
+          const link = document.createElement("a");
+
+          name.textContent = filename;
+          link.href = `/api/files/${encodeURIComponent(filename)}`;
+          link.textContent = "Download";
+
+          item.append(name, link);
+          list.append(item);
+        }
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        if (!input.files.length) {
+          return;
+        }
+
+        button.disabled = true;
+        status.textContent = "Uploading...";
+
+        const body = new FormData();
+        body.append("file", input.files[0]);
+
+        try {
+          const response = await fetch("/api/files", {
+            method: "POST",
+            body,
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            status.textContent = data.message || "Upload failed.";
+            return;
+          }
+
+          status.textContent = `Uploaded ${data.filename}.`;
+          input.value = "";
+          await loadFiles();
+        } catch {
+          status.textContent = "Upload failed.";
+        } finally {
+          button.disabled = false;
+        }
       });
+
+      loadFiles();
     </script>
   </body>
 </html>

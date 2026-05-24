@@ -7,3 +7,4 @@ venv/
 .gitignore
 Dockerfile
 README.md
+uploads/
