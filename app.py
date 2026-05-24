@@ -12,6 +12,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_SIZE_BYTES
 
 UPLOAD_FOLDER = Path(app.root_path) / "uploads"
 UPLOAD_FOLDER.mkdir(exist_ok=True)
+UPLOAD_ROOT = UPLOAD_FOLDER.resolve()
 
 ALLOWED_EXTENSIONS = {
     "7z",
@@ -117,16 +118,16 @@ def resolve_upload_path(relative_path=""):
     for part in parts:
         validate_name(part, "Path segments")
 
-    path = (UPLOAD_FOLDER / Path(*parts)).resolve() if parts else UPLOAD_FOLDER.resolve()
+    path = (UPLOAD_ROOT / Path(*parts)).resolve() if parts else UPLOAD_ROOT
 
-    if path != UPLOAD_FOLDER.resolve() and UPLOAD_FOLDER.resolve() not in path.parents:
+    if path != UPLOAD_ROOT and UPLOAD_ROOT not in path.parents:
         abort(400, description="Path is outside the upload folder.")
 
     return path
 
 
 def item_payload(path):
-    relative_path = path.relative_to(UPLOAD_FOLDER).as_posix()
+    relative_path = path.relative_to(UPLOAD_ROOT).as_posix()
     payload = {
         "name": path.name,
         "path": "" if relative_path == "." else relative_path,
@@ -198,12 +199,13 @@ def files():
 def items():
     relative_path = request.args.get("path", "")
     folder = resolve_upload_path(relative_path)
-    parent = folder.parent.relative_to(UPLOAD_FOLDER).as_posix() if folder != UPLOAD_FOLDER else ""
+    parent_path = folder.parent.relative_to(UPLOAD_ROOT).as_posix() if folder != UPLOAD_ROOT else ""
+    parent = "" if parent_path == "." else parent_path
 
     return jsonify({
         "items": list_items(relative_path),
         "parent": parent,
-        "path": "" if folder == UPLOAD_FOLDER else folder.relative_to(UPLOAD_FOLDER).as_posix(),
+        "path": "" if folder == UPLOAD_ROOT else folder.relative_to(UPLOAD_ROOT).as_posix(),
     })
 
 
@@ -235,7 +237,7 @@ def rename_item():
 
     validate_name(new_name)
 
-    if item_path == UPLOAD_FOLDER.resolve() or not item_path.exists():
+    if item_path == UPLOAD_ROOT or not item_path.exists():
         abort(404, description="File or folder was not found.")
 
     destination = item_path.with_name(new_name)
@@ -251,7 +253,7 @@ def rename_item():
 def delete_item():
     item_path = resolve_upload_path(request.args.get("path", ""))
 
-    if item_path == UPLOAD_FOLDER.resolve() or not item_path.exists():
+    if item_path == UPLOAD_ROOT or not item_path.exists():
         abort(404, description="File or folder was not found.")
 
     if item_path.is_dir():
@@ -273,7 +275,7 @@ def upload_file():
     saved_filename = available_filename(folder, filename)
     request.files["file"].save(folder / saved_filename)
 
-    saved_path = (folder / saved_filename).relative_to(UPLOAD_FOLDER).as_posix()
+    saved_path = (folder / saved_filename).relative_to(UPLOAD_ROOT).as_posix()
     return jsonify({"filename": saved_filename, "path": saved_path}), 201
 
 
