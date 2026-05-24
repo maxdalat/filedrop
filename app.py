@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory
 from werkzeug.exceptions import HTTPException
@@ -101,8 +102,45 @@ def parse_upload_file(upload):
     return filename
 
 
-def available_filename(filename):
-    path = UPLOAD_FOLDER / filename
+def validate_name(name, label="Names"):
+    if not name or not name.strip():
+        abort(400, description=f"{label} must include at least one visible character.")
+
+    if name in {".", ".."} or any(char in name for char in BLOCKED_FILENAME_CHARS):
+        abort(400, description=f"{label} cannot include path separators.")
+
+
+def resolve_upload_path(relative_path=""):
+    relative_path = relative_path or ""
+    parts = [part for part in relative_path.split("/") if part]
+
+    for part in parts:
+        validate_name(part, "Path segments")
+
+    path = (UPLOAD_FOLDER / Path(*parts)).resolve() if parts else UPLOAD_FOLDER.resolve()
+
+    if path != UPLOAD_FOLDER.resolve() and UPLOAD_FOLDER.resolve() not in path.parents:
+        abort(400, description="Path is outside the upload folder.")
+
+    return path
+
+
+def item_payload(path):
+    relative_path = path.relative_to(UPLOAD_FOLDER).as_posix()
+    payload = {
+        "name": path.name,
+        "path": "" if relative_path == "." else relative_path,
+        "type": "folder" if path.is_dir() else "file",
+    }
+
+    if path.is_file():
+        payload["size"] = path.stat().st_size
+
+    return payload
+
+
+def available_filename(folder, filename):
+    path = folder / filename
     if not path.exists():
         return filename
 
@@ -112,13 +150,23 @@ def available_filename(filename):
 
     while True:
         candidate = f"{stem}_{counter}{suffix}"
-        if not (UPLOAD_FOLDER / candidate).exists():
+        if not (folder / candidate).exists():
             return candidate
         counter += 1
 
 
 def list_uploaded_files():
     return sorted(path.name for path in UPLOAD_FOLDER.iterdir() if path.is_file())
+
+
+def list_items(relative_path=""):
+    folder = resolve_upload_path(relative_path)
+
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+
+    items = [item_payload(path) for path in folder.iterdir()]
+    return sorted(items, key=lambda item: (item["type"] != "folder", item["name"].casefold()))
 
 
 @app.errorhandler(HTTPException)
@@ -146,29 +194,107 @@ def files():
     return jsonify({"files": list_uploaded_files()})
 
 
+@app.get("/api/items")
+def items():
+    relative_path = request.args.get("path", "")
+    folder = resolve_upload_path(relative_path)
+    parent = folder.parent.relative_to(UPLOAD_FOLDER).as_posix() if folder != UPLOAD_FOLDER else ""
+
+    return jsonify({
+        "items": list_items(relative_path),
+        "parent": parent,
+        "path": "" if folder == UPLOAD_FOLDER else folder.relative_to(UPLOAD_FOLDER).as_posix(),
+    })
+
+
+@app.post("/api/folders")
+def create_folder():
+    data = request.get_json(silent=True) or {}
+    folder = resolve_upload_path(data.get("path", ""))
+    name = data.get("name", "")
+
+    validate_name(name, "Folder names")
+
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+
+    new_folder = folder / name
+
+    if new_folder.exists():
+        abort(409, description="A file or folder with that name already exists.")
+
+    new_folder.mkdir()
+    return jsonify(item_payload(new_folder)), 201
+
+
+@app.patch("/api/items")
+def rename_item():
+    data = request.get_json(silent=True) or {}
+    item_path = resolve_upload_path(data.get("path", ""))
+    new_name = data.get("name", "")
+
+    validate_name(new_name)
+
+    if item_path == UPLOAD_FOLDER.resolve() or not item_path.exists():
+        abort(404, description="File or folder was not found.")
+
+    destination = item_path.with_name(new_name)
+
+    if destination.exists():
+        abort(409, description="A file or folder with that name already exists.")
+
+    item_path.rename(destination)
+    return jsonify(item_payload(destination))
+
+
+@app.delete("/api/items")
+def delete_item():
+    item_path = resolve_upload_path(request.args.get("path", ""))
+
+    if item_path == UPLOAD_FOLDER.resolve() or not item_path.exists():
+        abort(404, description="File or folder was not found.")
+
+    if item_path.is_dir():
+        shutil.rmtree(item_path)
+    else:
+        item_path.unlink()
+
+    return "", 204
+
+
 @app.post("/api/files")
 def upload_file():
     filename = parse_upload_file(request.files.get("file"))
-    saved_filename = available_filename(filename)
-    request.files["file"].save(UPLOAD_FOLDER / saved_filename)
+    folder = resolve_upload_path(request.form.get("path", ""))
 
-    return jsonify({"filename": saved_filename}), 201
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+
+    saved_filename = available_filename(folder, filename)
+    request.files["file"].save(folder / saved_filename)
+
+    saved_path = (folder / saved_filename).relative_to(UPLOAD_FOLDER).as_posix()
+    return jsonify({"filename": saved_filename, "path": saved_path}), 201
 
 
 @app.get("/api/files/<path:filename>")
 def download_file(filename):
-    if filename not in list_uploaded_files():
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.exists() or not file_path.is_file():
         abort(404, description="File was not found.")
 
-    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+    return send_from_directory(file_path.parent, file_path.name, as_attachment=True)
 
 
 @app.delete("/api/files/<path:filename>")
 def delete_file(filename):
-    if filename not in list_uploaded_files():
+    file_path = resolve_upload_path(filename)
+
+    if not file_path.exists() or not file_path.is_file():
         abort(404, description="File was not found.")
 
-    (UPLOAD_FOLDER / filename).unlink()
+    file_path.unlink()
     return "", 204
 
 

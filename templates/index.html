@@ -278,14 +278,26 @@
         display: grid;
         grid-template-columns: auto minmax(0, 1fr) auto auto;
         align-items: center;
-        gap: 12px;
-        padding: 16px;
+        gap: 14px;
+        padding: 14px 16px;
         border-bottom: 1px solid #d1d5db;
-        max-height: 88px;
+        max-height: 92px;
         opacity: 1;
         overflow: hidden;
         transform: translateX(0);
         transition: opacity 160ms ease, transform 160ms ease, max-height 160ms ease, padding 160ms ease, border-width 160ms ease;
+      }
+
+      li.file-row {
+        cursor: default;
+      }
+
+      li.file-row:hover {
+        background: #f3f4f6;
+      }
+
+      li.file-row.is-selected {
+        background: #e8f5ee;
       }
 
       .file-toolbar {
@@ -307,7 +319,7 @@
       }
 
       .delete-selected-button {
-        padding: 9px 11px;
+        padding: 12px 16px;
         background: #991b1b;
       }
 
@@ -317,10 +329,11 @@
       }
 
       .select-file-checkbox {
-        width: 18px;
-        height: 18px;
+        width: 22px;
+        height: 22px;
         margin: 0;
         accent-color: #166534;
+        cursor: pointer;
       }
 
       .file-name {
@@ -337,14 +350,14 @@
 
       .delete-file-button {
         justify-self: end;
-        width: 28px;
-        height: 28px;
+        width: 38px;
+        height: 38px;
         padding: 0;
         border: 0;
         border-radius: 999px;
         background: transparent;
         color: #6b7280;
-        font-size: 1.25rem;
+        font-size: 1.55rem;
         line-height: 1;
       }
 
@@ -412,6 +425,14 @@
         ul,
         li {
           border-color: #374151;
+        }
+
+        li.file-row:hover {
+          background: #182231;
+        }
+
+        li.file-row.is-selected {
+          background: #123524;
         }
 
         a {
@@ -510,6 +531,7 @@
       let uploadPanelHideTimer;
       let uploadRunId = 0;
       let selectedFiles = new Set();
+      let lastSelectedIndex = null;
 
       parallelSlider.value = String(parallelUploads);
       parallelValue.textContent = String(parallelUploads);
@@ -558,6 +580,7 @@
         list.innerHTML = "";
         list.className = "";
         selectedFiles = new Set();
+        lastSelectedIndex = null;
         updateSelectionControls();
 
         if (!data.files.length) {
@@ -572,30 +595,35 @@
           const link = document.createElement("a");
           const deleteButton = document.createElement("button");
 
+          item.className = "file-row";
           item.dataset.filename = filename;
+          item.dataset.index = String(data.files.indexOf(filename));
           checkbox.className = "select-file-checkbox";
           checkbox.type = "checkbox";
           checkbox.setAttribute("aria-label", `Select ${filename}`);
-          checkbox.addEventListener("change", () => {
-            if (checkbox.checked) {
-              selectedFiles.add(filename);
-            } else {
-              selectedFiles.delete(filename);
-            }
-
-            updateSelectionControls();
+          checkbox.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            handleFileSelection(filename, Number(item.dataset.index), event, { checkbox: true });
           });
 
           name.className = "file-name";
           name.textContent = filename;
           link.href = `/api/files/${encodeURIComponent(filename)}`;
           link.textContent = "Download";
+          link.addEventListener("click", (event) => {
+            event.stopPropagation();
+          });
           deleteButton.className = "delete-file-button";
           deleteButton.type = "button";
           deleteButton.textContent = "×";
           deleteButton.setAttribute("aria-label", `Delete ${filename}`);
-          deleteButton.addEventListener("click", () => {
+          deleteButton.addEventListener("click", (event) => {
+            event.stopPropagation();
             deleteUploadedFile(filename, item, deleteButton);
+          });
+          item.addEventListener("click", (event) => {
+            handleFileSelection(filename, Number(item.dataset.index), event);
           });
 
           item.append(checkbox, name, link, deleteButton);
@@ -677,12 +705,65 @@
         uploadPanelActions.classList.toggle("is-visible", hasFailedUploads);
       }
 
+      function fileRows() {
+        return Array.from(list.querySelectorAll("li.file-row"));
+      }
+
+      function syncFileSelectionView() {
+        fileRows().forEach((row) => {
+          const isSelected = selectedFiles.has(row.dataset.filename);
+          const checkbox = row.querySelector(".select-file-checkbox");
+
+          row.classList.toggle("is-selected", isSelected);
+
+          if (checkbox) {
+            checkbox.checked = isSelected;
+          }
+        });
+      }
+
       function updateSelectionControls() {
         const selectedCount = selectedFiles.size;
 
+        syncFileSelectionView();
         fileToolbar.classList.toggle("is-visible", selectedCount > 0);
         selectionCount.textContent = `${selectedCount} selected`;
         deleteSelectedButton.disabled = selectedCount === 0;
+      }
+
+      function selectFileRange(startIndex, endIndex) {
+        const start = Math.min(startIndex, endIndex);
+        const end = Math.max(startIndex, endIndex);
+
+        fileRows().forEach((row) => {
+          const rowIndex = Number(row.dataset.index);
+
+          if (rowIndex >= start && rowIndex <= end) {
+            selectedFiles.add(row.dataset.filename);
+          }
+        });
+      }
+
+      function handleFileSelection(filename, index, event, options = {}) {
+        const isRangeSelection = event.shiftKey && lastSelectedIndex !== null;
+        const isToggleSelection = event.metaKey || event.ctrlKey || options.checkbox;
+
+        if (isRangeSelection) {
+          selectFileRange(lastSelectedIndex, index);
+        } else if (isToggleSelection) {
+          if (selectedFiles.has(filename)) {
+            selectedFiles.delete(filename);
+          } else {
+            selectedFiles.add(filename);
+          }
+
+          lastSelectedIndex = index;
+        } else {
+          selectedFiles = new Set([filename]);
+          lastSelectedIndex = index;
+        }
+
+        updateSelectionControls();
       }
 
       function showEmptyFileList() {

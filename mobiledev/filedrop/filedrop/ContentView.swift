@@ -96,6 +96,14 @@ final class FileDropViewModel: ObservableObject {
             return
         }
 
+        // Begin security-scoped access if required
+        let needsSecurityAccess = fileURL.startAccessingSecurityScopedResource()
+        defer {
+            if needsSecurityAccess {
+                fileURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
         isLoading = true
         defer { isLoading = false }
 
