@@ -22,7 +22,7 @@
       }
 
       main {
-        width: min(92vw, 760px);
+        width: min(92vw, 820px);
         margin: 0 auto;
         padding: 56px 0;
       }
@@ -39,19 +39,27 @@
         line-height: 1.6;
       }
 
-      form {
+      .upload-form {
         display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
         align-items: center;
-        margin: 28px 0;
+        margin: 0;
       }
 
-      input[type="file"] {
-        max-width: 100%;
+      .file-input {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
       }
 
-      button {
+      button,
+      .choose-files-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         border: 0;
         border-radius: 8px;
         padding: 12px 16px;
@@ -59,9 +67,11 @@
         color: white;
         font: inherit;
         cursor: pointer;
+        line-height: normal;
       }
 
-      button:disabled {
+      button:disabled,
+      .choose-files-button.is-disabled {
         cursor: progress;
         opacity: 0.72;
       }
@@ -105,7 +115,7 @@
         align-items: center;
         gap: 12px;
         margin-bottom: 10px;
-        font-weight: 700;
+        font-weight: 600;
       }
 
       .setting-row:last-child {
@@ -137,7 +147,7 @@
         justify-content: space-between;
         gap: 12px;
         margin-bottom: 8px;
-        font-weight: 700;
+        font-weight: 600;
       }
 
       progress {
@@ -168,7 +178,7 @@
       }
 
       .upload-list {
-        max-height: min(46vh, 420px);
+        max-height: min(32vh, 260px);
         overflow-y: auto;
         border-top: 1px solid #d1d5db;
       }
@@ -185,8 +195,8 @@
 
       .clear-failed-button,
       .dismiss-upload-button {
-        border: 1px solid #d1d5db;
-        background: #ffffff;
+        border: 1px solid rgb(209 213 219 / 70%);
+        background: rgb(255 255 255 / 72%);
         color: #1f2933;
       }
 
@@ -202,8 +212,8 @@
       .upload-item {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
-        gap: 8px 16px;
-        padding: 14px 0;
+        gap: 6px 12px;
+        padding: 10px 0;
         border-bottom: 1px solid #d1d5db;
         opacity: 1;
         transform: translateX(0);
@@ -225,27 +235,40 @@
       }
 
       .upload-name {
-        overflow-wrap: anywhere;
-        font-weight: 700;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
       }
 
       .upload-state {
         color: #5b6472;
-        font-size: 0.95rem;
+        font-size: 0.85rem;
       }
 
       .upload-item progress {
         grid-column: 1 / -1;
-        height: 10px;
+        height: 8px;
       }
 
       .dismiss-upload-button {
-        width: 30px;
-        height: 30px;
+        width: 26px;
+        height: 26px;
         padding: 0;
+        border-color: transparent;
         border-radius: 999px;
-        font-size: 1.1rem;
+        background: transparent;
+        color: #6b7280;
+        font-size: 1rem;
         line-height: 1;
+        transition: background-color 160ms ease, color 160ms ease;
+      }
+
+      .dismiss-upload-button:hover,
+      .dismiss-upload-button:focus-visible {
+        background: #fee2e2;
+        color: #b91c1c;
       }
 
       .upload-panel {
@@ -254,68 +277,85 @@
         bottom: 16px;
         z-index: 3;
         display: none;
-        width: min(92vw, 420px);
-        max-height: min(70vh, 560px);
-        padding: 16px;
-        border: 1px solid #d1d5db;
+        width: min(88vw, 340px);
+        max-height: min(52vh, 360px);
+        padding: 12px;
+        border: 1px solid rgb(209 213 219 / 70%);
         border-radius: 8px;
-        background: #ffffff;
-        box-shadow: 0 16px 40px rgb(31 41 51 / 18%);
+        background: rgb(255 255 255 / 82%);
+        box-shadow: 0 12px 28px rgb(31 41 51 / 14%);
+        backdrop-filter: blur(10px);
       }
 
       .upload-panel.is-visible {
         display: block;
       }
 
-      ul {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        border-top: 1px solid #d1d5db;
-      }
-
-      li {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto auto;
+      .folder-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
         align-items: center;
-        gap: 14px;
-        padding: 14px 16px;
-        border-bottom: 1px solid #d1d5db;
-        max-height: 92px;
-        opacity: 1;
-        overflow: hidden;
-        transform: translateX(0);
-        transition: opacity 160ms ease, transform 160ms ease, max-height 160ms ease, padding 160ms ease, border-width 160ms ease;
+        justify-content: space-between;
+        margin: 24px 0 8px;
       }
 
-      li.file-row {
-        cursor: default;
+      .folder-toolbar-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
       }
 
-      li.file-row:hover {
-        background: #f3f4f6;
+      .new-folder-button {
+        background: #166534;
       }
 
-      li.file-row.is-selected {
-        background: #e8f5ee;
+      .current-path {
+        color: #5b6472;
+        font-weight: 500;
+      }
+
+      .current-path strong {
+        color: #1f2933;
+        font-weight: 600;
       }
 
       .file-toolbar {
-        display: none;
+        display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
         margin: 0 0 12px;
       }
 
-      .file-toolbar.is-visible {
+      .file-toolbar-actions {
         display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .select-all-control {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        color: #5b6472;
+        font-size: 0.95rem;
+        font-weight: 600;
+      }
+
+      .select-all-control input[type="checkbox"] {
+        width: 22px;
+        height: 22px;
+        margin: 0;
+        accent-color: #166534;
+        cursor: pointer;
       }
 
       .selection-count {
         color: #5b6472;
         font-size: 0.95rem;
-        font-weight: 700;
+        font-weight: 600;
       }
 
       .delete-selected-button {
@@ -328,6 +368,39 @@
         opacity: 0.45;
       }
 
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        border-top: 1px solid #d1d5db;
+      }
+
+      li {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 16px;
+        border-bottom: 1px solid #d1d5db;
+        max-height: 92px;
+        opacity: 1;
+        overflow: hidden;
+        transform: translateX(0);
+        transition: opacity 160ms ease, transform 160ms ease, max-height 160ms ease, padding 160ms ease, border-width 160ms ease;
+      }
+
+      li.file-row {
+        cursor: pointer;
+      }
+
+      li.file-row:hover {
+        background: #f3f4f6;
+      }
+
+      li.file-row.is-selected {
+        background: #e8f5ee;
+      }
+
       .select-file-checkbox {
         width: 22px;
         height: 22px;
@@ -336,40 +409,53 @@
         cursor: pointer;
       }
 
-      .file-name {
+      .item-name {
         min-width: 0;
         overflow-wrap: anywhere;
+        font-weight: 500;
       }
 
-      .file-actions {
+      .item-actions {
         display: flex;
         flex: 0 0 auto;
         gap: 10px;
         align-items: center;
       }
 
-      .delete-file-button {
-        justify-self: end;
-        width: 38px;
-        height: 38px;
+      .item-action-link,
+      .item-action-button {
+        padding: 8px 12px;
+        border: 1px solid #d1d5db;
+        background: #ffffff;
+        color: #1f2933;
+        text-decoration: none;
+      }
+
+      .item-action-button.delete {
+        width: 34px;
+        height: 34px;
         padding: 0;
-        border: 0;
+        border-color: transparent;
         border-radius: 999px;
         background: transparent;
         color: #6b7280;
-        font-size: 1.55rem;
+        font-size: 1.35rem;
         line-height: 1;
+        text-align: center;
+        transform: scale(1);
+        transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
       }
 
-      .delete-file-button:hover,
-      .delete-file-button:focus-visible {
+      .item-action-button.delete:hover,
+      .item-action-button.delete:focus-visible {
         background: #fee2e2;
         color: #b91c1c;
+        transform: scale(1.08);
       }
 
-      a {
-        color: #14532d;
-        font-weight: 700;
+      .item-action-button.open,
+      .item-action-link {
+        background: #f8fafc;
       }
 
       .empty {
@@ -382,35 +468,75 @@
         border-top: 0;
       }
 
+      .context-menu {
+        position: fixed;
+        z-index: 4;
+        min-width: 180px;
+        padding: 8px;
+        border: 1px solid #d1d5db;
+        border-radius: 12px;
+        background: #ffffff;
+        box-shadow: 0 16px 40px rgb(31 41 51 / 18%);
+      }
+
+      .context-menu[hidden] {
+        display: none;
+      }
+
+      .context-menu.is-open {
+        display: block;
+      }
+
+      .context-menu button {
+        display: block;
+        width: 100%;
+        padding: 10px 12px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: #1f2933;
+        text-align: left;
+      }
+
+      .context-menu button:hover,
+      .context-menu button:focus-visible {
+        background: #f3f4f6;
+      }
+
+      .context-menu button.delete {
+        color: #b91c1c;
+      }
+
+      a {
+        color: #14532d;
+        font-weight: 600;
+      }
+
       @media (prefers-color-scheme: dark) {
         body {
           background: #111827;
           color: #f9fafb;
         }
 
-        .settings-panel {
+        .settings-panel,
+        .upload-panel,
+        .context-menu {
           border-color: #374151;
-          background: #1f2937;
+          background: rgb(31 41 55 / 82%);
         }
 
-        .upload-panel {
-          border-color: #374151;
-          background: #1f2937;
-        }
-
-        .clear-failed-button,
-        .dismiss-upload-button {
+        .clear-failed-button {
           border-color: #4b5563;
-          background: #111827;
+          background: rgb(17 24 39 / 72%);
           color: #f9fafb;
         }
 
-        .delete-file-button {
+        .dismiss-upload-button {
           color: #9ca3af;
         }
 
-        .delete-file-button:hover,
-        .delete-file-button:focus-visible {
+        .dismiss-upload-button:hover,
+        .dismiss-upload-button:focus-visible {
           background: #450a0a;
           color: #fca5a5;
         }
@@ -435,19 +561,44 @@
           background: #123524;
         }
 
+        .item-action-link,
+        .item-action-button,
+        .context-menu button {
+          background: #111827;
+          color: #f9fafb;
+        }
+
+        .item-action-link,
+        .item-action-button.open {
+          border-color: #4b5563;
+        }
+
+        .item-action-button.delete:hover,
+        .item-action-button.delete:focus-visible {
+          background: #450a0a;
+          color: #fca5a5;
+        }
+
+        .context-menu button:hover,
+        .context-menu button:focus-visible {
+          background: #182231;
+        }
+
         a {
           color: #86efac;
         }
 
         .empty,
         .upload-state,
-        .selection-count {
+        .selection-count,
+        .select-all-control,
+        .current-path {
           color: #cbd5e1;
         }
       }
     </style>
   </head>
-  <body>
+  <body data-current-path="{{ current_path|default('', true) }}">
     <div class="settings">
       <button class="settings-toggle" type="button" id="settings-toggle" aria-label="Upload settings" aria-expanded="false" aria-controls="settings-panel">⚙</button>
       <div class="settings-panel" id="settings-panel" hidden>
@@ -469,12 +620,7 @@
 
     <main>
       <h1>Filedrop</h1>
-      <p>Upload files, view the files in the upload folder, and download them again.</p>
-
-      <form id="upload-form">
-        <input type="file" name="file" id="file-input" multiple required>
-        <button type="submit" id="upload-button">Upload</button>
-      </form>
+      <p>Upload files, organize folders, and manage items in the upload folder.</p>
 
       <div class="upload-panel" id="upload-panel">
         <div class="upload-panel-actions" id="upload-panel-actions">
@@ -491,17 +637,38 @@
       </div>
 
       <p class="status" id="status"></p>
-      <div class="file-toolbar" id="file-toolbar">
-        <span class="selection-count" id="selection-count">0 selected</span>
-        <button class="delete-selected-button" type="button" id="delete-selected-button" disabled>Delete selected</button>
+
+      <div class="folder-toolbar">
+        <div class="folder-toolbar-actions">
+          <form class="upload-form" id="upload-form">
+            <label class="choose-files-button" id="choose-files-button" for="file-input">Upload files</label>
+            <input class="file-input" type="file" name="file" id="file-input" multiple>
+          </form>
+          <button class="new-folder-button" type="button" id="new-folder-button">+ New folder</button>
+          <button type="button" id="up-button" disabled>↑ Up</button>
+        </div>
+        <span class="current-path" id="current-path-label">Current folder: <strong>Root</strong></span>
       </div>
+
+      <div class="file-toolbar" id="file-toolbar">
+        <label class="select-all-control" for="select-all-checkbox">
+          <input type="checkbox" id="select-all-checkbox" disabled>
+          <span>Select all</span>
+        </label>
+        <div class="file-toolbar-actions">
+          <span class="selection-count" id="selection-count">0 selected</span>
+          <button class="delete-selected-button" type="button" id="delete-selected-button" disabled>Delete selected</button>
+        </div>
+      </div>
+
       <ul id="file-list"></ul>
+      <div class="context-menu" id="context-menu" hidden></div>
     </main>
 
     <script>
       const form = document.querySelector("#upload-form");
       const input = document.querySelector("#file-input");
-      const button = document.querySelector("#upload-button");
+      const chooseFilesButton = document.querySelector("#choose-files-button");
       const status = document.querySelector("#status");
       const uploadPanel = document.querySelector("#upload-panel");
       const uploadPanelActions = document.querySelector("#upload-panel-actions");
@@ -519,8 +686,13 @@
       const confirmSingleDelete = document.querySelector("#confirm-single-delete");
       const confirmBulkDelete = document.querySelector("#confirm-bulk-delete");
       const fileToolbar = document.querySelector("#file-toolbar");
+      const selectAllCheckbox = document.querySelector("#select-all-checkbox");
       const selectionCount = document.querySelector("#selection-count");
       const deleteSelectedButton = document.querySelector("#delete-selected-button");
+      const newFolderButton = document.querySelector("#new-folder-button");
+      const upButton = document.querySelector("#up-button");
+      const currentPathLabel = document.querySelector("#current-path-label");
+      const contextMenu = document.querySelector("#context-menu");
 
       const savedParallelUploads = Number.parseInt(localStorage.getItem("parallelUploads"), 10);
       const savedConfirmSingleDelete = localStorage.getItem("confirmSingleDelete");
@@ -530,8 +702,11 @@
         : 3;
       let uploadPanelHideTimer;
       let uploadRunId = 0;
-      let selectedFiles = new Set();
-      let lastSelectedIndex = null;
+      let selectedItems = new Set();
+      let lastSelectedPath = null;
+      let currentPath = document.body.dataset.currentPath || "";
+      const itemCache = new Map();
+      const pendingItemLoads = new Map();
 
       parallelSlider.value = String(parallelUploads);
       parallelValue.textContent = String(parallelUploads);
@@ -559,7 +734,24 @@
       });
 
       deleteSelectedButton.addEventListener("click", () => {
-        deleteSelectedFiles();
+        deleteSelectedItems();
+      });
+
+      newFolderButton.addEventListener("click", createFolderPrompt);
+
+      upButton.addEventListener("click", () => {
+        if (!currentPath) {
+          return;
+        }
+
+        navigateToFolder(currentPath.split("/").slice(0, -1).join("/"));
+      });
+
+      selectAllCheckbox.addEventListener("change", () => {
+        const paths = visibleItemPaths();
+        selectedItems = selectAllCheckbox.checked ? new Set(paths) : new Set();
+        lastSelectedPath = paths.length ? paths[paths.length - 1] : null;
+        updateSelectionControls();
       });
 
       clearFailedButton.addEventListener("click", () => {
@@ -573,62 +765,438 @@
         });
       });
 
-      async function loadFiles() {
-        const response = await fetch("/api/files");
-        const data = await response.json();
+      function updatePathLabel() {
+        const label = currentPath ? currentPath.replace(/\//g, " / ") : "Root";
+        currentPathLabel.innerHTML = `Current folder: <strong>${label}</strong>`;
+        upButton.disabled = !currentPath;
+      }
 
-        list.innerHTML = "";
-        list.className = "";
-        selectedFiles = new Set();
-        lastSelectedIndex = null;
+      function folderUrl(path) {
+        if (!path) {
+          return "/";
+        }
+
+        return `/browse/${path.split("/").map(encodeURIComponent).join("/")}`;
+      }
+
+      function navigateToFolder(path) {
+        window.location.assign(folderUrl(path));
+      }
+
+      function hideContextMenu() {
+        contextMenu.hidden = true;
+        contextMenu.classList.remove("is-open");
+        contextMenu.innerHTML = "";
+      }
+
+      function showContextMenu(item, x, y) {
+        hideContextMenu();
+        const actions = [];
+
+        if (item.type === "folder") {
+          actions.push({ label: "Open", action: () => { navigateToFolder(item.path); } });
+        } else {
+          actions.push({
+            label: "Download",
+            action: () => {
+              window.location.assign(`/api/files/${item.path.split("/").map(encodeURIComponent).join("/")}`);
+            },
+          });
+        }
+
+        actions.push({ label: "Delete", action: () => { deleteItem(item); }, className: "delete" });
+
+        actions.forEach((action) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = action.label;
+          button.className = action.className || "";
+          button.addEventListener("click", () => {
+            action.action();
+            hideContextMenu();
+          });
+          contextMenu.append(button);
+        });
+
+        contextMenu.hidden = false;
+        contextMenu.classList.add("is-open");
+        const width = contextMenu.offsetWidth || 180;
+        const height = contextMenu.offsetHeight || 80;
+        const maxX = Math.max(8, window.innerWidth - width - 8);
+        const maxY = Math.max(8, window.innerHeight - height - 8);
+
+        contextMenu.style.left = `${Math.min(x, maxX)}px`;
+        contextMenu.style.top = `${Math.min(y, maxY)}px`;
+      }
+
+      function setSelectedItems(nextSelectedItems, nextLastSelectedPath = lastSelectedPath) {
+        selectedItems = nextSelectedItems;
+        lastSelectedPath = nextLastSelectedPath;
         updateSelectionControls();
+      }
 
-        if (!data.files.length) {
+      function rowSelectionMode(path, index, event, options = {}) {
+        const isRangeSelection = event.shiftKey && lastSelectedPath !== null;
+        const isCheckboxSelection = Boolean(options.checkbox);
+        const isToggleSelection = event.metaKey || event.ctrlKey;
+
+        if (isRangeSelection) {
+          const start = Number(document.querySelector(`li[data-path="${CSS.escape(lastSelectedPath)}"]`)?.dataset.index || 0);
+          const end = index;
+          const rows = Array.from(list.querySelectorAll("li.file-row"));
+          const startIndex = Math.min(start, end);
+          const endIndex = Math.max(start, end);
+
+          rows.forEach((row) => {
+            const rowIndex = Number(row.dataset.index);
+            if (rowIndex >= startIndex && rowIndex <= endIndex) {
+              selectedItems.add(row.dataset.path);
+            }
+          });
+          lastSelectedPath = path;
+        } else if (isToggleSelection) {
+          if (selectedItems.has(path)) {
+            selectedItems.delete(path);
+          } else {
+            selectedItems.add(path);
+          }
+          lastSelectedPath = path;
+        } else if (isCheckboxSelection) {
+          if (options.checked) {
+            selectedItems.add(path);
+          } else {
+            selectedItems.delete(path);
+          }
+          lastSelectedPath = path;
+        } else {
+          selectedItems = new Set([path]);
+          lastSelectedPath = path;
+        }
+
+        updateSelectionControls();
+      }
+
+      function itemRequestUrl(path) {
+        const query = path ? `?path=${encodeURIComponent(path)}` : "";
+        return `/api/items${query}`;
+      }
+
+      async function fetchItems(path, options = {}) {
+        const force = Boolean(options.force);
+
+        if (!force && itemCache.has(path)) {
+          return itemCache.get(path);
+        }
+
+        if (!force && pendingItemLoads.has(path)) {
+          return pendingItemLoads.get(path);
+        }
+
+        const request = fetch(itemRequestUrl(path))
+          .then(async (response) => {
+            const data = await response.json();
+
+            if (!response.ok) {
+              throw new Error(data.message || "Could not load items.");
+            }
+
+            itemCache.set(path, data);
+            return data;
+          })
+          .finally(() => {
+            pendingItemLoads.delete(path);
+          });
+
+        pendingItemLoads.set(path, request);
+        return request;
+      }
+
+      function preloadFolder(path) {
+        if (!path || itemCache.has(path) || pendingItemLoads.has(path)) {
+          return;
+        }
+
+        fetchItems(path).catch(() => {});
+      }
+
+      function invalidateFolder(path) {
+        itemCache.delete(path || "");
+      }
+
+      function renderItems(data) {
+        status.textContent = "";
+
+        if (!data.items.length) {
           showEmptyFileList();
           return;
         }
 
-        for (const filename of data.files) {
-          const item = document.createElement("li");
+        data.items.forEach((item, index) => {
+          const row = document.createElement("li");
           const checkbox = document.createElement("input");
           const name = document.createElement("span");
-          const link = document.createElement("a");
-          const deleteButton = document.createElement("button");
+          const actions = document.createElement("div");
 
-          item.className = "file-row";
-          item.dataset.filename = filename;
-          item.dataset.index = String(data.files.indexOf(filename));
-          checkbox.className = "select-file-checkbox";
+          row.className = "file-row";
+          row.dataset.path = item.path;
+          row.dataset.index = String(index);
+          row.dataset.type = item.type;
+
           checkbox.type = "checkbox";
-          checkbox.setAttribute("aria-label", `Select ${filename}`);
+          checkbox.className = "select-file-checkbox";
+          checkbox.setAttribute("aria-label", `Select ${item.name}`);
           checkbox.addEventListener("click", (event) => {
-            event.preventDefault();
             event.stopPropagation();
-            handleFileSelection(filename, Number(item.dataset.index), event, { checkbox: true });
+          });
+          checkbox.addEventListener("change", (event) => {
+            event.stopPropagation();
+            rowSelectionMode(item.path, index, event, { checkbox: true, checked: checkbox.checked });
           });
 
-          name.className = "file-name";
-          name.textContent = filename;
-          link.href = `/api/files/${encodeURIComponent(filename)}`;
-          link.textContent = "Download";
-          link.addEventListener("click", (event) => {
-            event.stopPropagation();
-          });
-          deleteButton.className = "delete-file-button";
+          name.className = "item-name";
+          name.textContent = item.name;
+
+          actions.className = "item-actions";
+
+          if (item.type === "folder") {
+            const openButton = document.createElement("button");
+            openButton.type = "button";
+            openButton.className = "item-action-button open";
+            openButton.textContent = "Open";
+            openButton.addEventListener("click", (event) => {
+              event.stopPropagation();
+              navigateToFolder(item.path);
+            });
+            actions.append(openButton);
+
+            row.addEventListener("mouseenter", () => {
+              preloadFolder(item.path);
+            });
+
+            row.addEventListener("focusin", () => {
+              preloadFolder(item.path);
+            });
+          } else {
+            const downloadLink = document.createElement("a");
+            downloadLink.className = "item-action-link";
+            downloadLink.href = `/api/files/${item.path.split("/").map(encodeURIComponent).join("/")}`;
+            downloadLink.textContent = "Download";
+            downloadLink.addEventListener("click", (event) => {
+              event.stopPropagation();
+            });
+            actions.append(downloadLink);
+          }
+
+          const deleteButton = document.createElement("button");
           deleteButton.type = "button";
+          deleteButton.className = "item-action-button delete";
           deleteButton.textContent = "×";
-          deleteButton.setAttribute("aria-label", `Delete ${filename}`);
+          deleteButton.setAttribute("aria-label", `Delete ${item.name}`);
           deleteButton.addEventListener("click", (event) => {
             event.stopPropagation();
-            deleteUploadedFile(filename, item, deleteButton);
+            deleteItem(item);
           });
-          item.addEventListener("click", (event) => {
-            handleFileSelection(filename, Number(item.dataset.index), event);
+          actions.append(deleteButton);
+
+          row.addEventListener("click", (event) => {
+            if (event.target.closest(".item-action-button, .item-action-link")) {
+              return;
+            }
+            rowSelectionMode(item.path, index, event);
           });
 
-          item.append(checkbox, name, link, deleteButton);
-          list.append(item);
+          row.addEventListener("contextmenu", (event) => {
+            event.preventDefault();
+            if (!selectedItems.has(item.path)) {
+              setSelectedItems(new Set([item.path]), item.path);
+            }
+            showContextMenu(item, event.clientX, event.clientY);
+          });
+
+          row.append(checkbox, name, actions);
+          list.append(row);
+        });
+
+        updateSelectionControls();
+      }
+
+      async function loadItems(options = {}) {
+        const requestedPath = currentPath;
+        updatePathLabel();
+        list.innerHTML = "";
+        list.className = "";
+        selectedItems = new Set();
+        lastSelectedPath = null;
+        updateSelectionControls();
+
+        try {
+          const data = await fetchItems(requestedPath, options);
+
+          if (requestedPath !== currentPath) {
+            return;
+          }
+
+          renderItems(data);
+        } catch (error) {
+          status.textContent = error.message || "Could not load items.";
+          showEmptyFileList();
         }
+      }
+
+      function syncItemSelectionView() {
+        const rows = Array.from(list.querySelectorAll("li.file-row"));
+
+        rows.forEach((row) => {
+          const isSelected = selectedItems.has(row.dataset.path);
+          const checkbox = row.querySelector(".select-file-checkbox");
+
+          row.classList.toggle("is-selected", isSelected);
+
+          if (checkbox) {
+            checkbox.checked = isSelected;
+          }
+        });
+
+        const selectedVisibleCount = rows.filter((row) => selectedItems.has(row.dataset.path)).length;
+        selectAllCheckbox.disabled = rows.length === 0;
+        selectAllCheckbox.checked = rows.length > 0 && selectedVisibleCount === rows.length;
+        selectAllCheckbox.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < rows.length;
+      }
+
+      function visibleItemPaths() {
+        return Array.from(list.querySelectorAll("li.file-row")).map((row) => row.dataset.path);
+      }
+
+      function updateSelectionControls() {
+        syncItemSelectionView();
+        selectionCount.textContent = `${selectedItems.size} selected`;
+        deleteSelectedButton.disabled = selectedItems.size === 0;
+      }
+
+      function showEmptyFileList() {
+        const empty = document.createElement("li");
+        empty.className = "empty";
+        empty.textContent = currentPath ? "This folder is empty." : "No files or folders uploaded yet.";
+        list.className = "empty-list";
+        list.append(empty);
+      }
+
+      async function createFolderPrompt() {
+        const folderName = window.prompt("Folder name");
+
+        if (!folderName) {
+          return;
+        }
+
+        const trimmedName = folderName.trim();
+
+        if (!trimmedName) {
+          status.textContent = "Folder names must include at least one visible character.";
+          return;
+        }
+
+        try {
+          const response = await fetch("/api/folders", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ name: trimmedName, path: currentPath }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            status.textContent = data.message || "Could not create folder.";
+            return;
+          }
+
+          invalidateFolder(currentPath);
+          status.textContent = `Created ${data.name}.`;
+          navigateToFolder(data.path);
+        } catch {
+          status.textContent = "Could not create folder.";
+        }
+      }
+
+      async function deleteItemRequest(path) {
+        const response = await fetch(`/api/items?path=${encodeURIComponent(path)}`, {
+          method: "DELETE",
+        });
+
+        if (!response.ok) {
+          let data = {};
+
+          try {
+            data = await response.json();
+          } catch {
+            data = {};
+          }
+
+          return { ok: false, message: data.message || `Could not delete ${path}.` };
+        }
+
+        return { ok: true };
+      }
+
+      async function deleteItem(item) {
+        if (confirmSingleDelete.checked && !window.confirm(`Delete ${item.name}?`)) {
+          return;
+        }
+
+        const result = await deleteItemRequest(item.path);
+
+        if (!result.ok) {
+          status.textContent = result.message;
+          return;
+        }
+
+        status.textContent = `Deleted ${item.name}.`;
+        invalidateFolder(currentPath);
+        invalidateFolder(item.path);
+        selectedItems.delete(item.path);
+        updateSelectionControls();
+        await loadItems({ force: true });
+      }
+
+      async function deleteSelectedItems() {
+        const items = Array.from(selectedItems);
+
+        if (!items.length) {
+          return;
+        }
+
+        if (confirmBulkDelete.checked && !window.confirm(`Delete ${items.length} selected item${items.length === 1 ? "" : "s"}?`)) {
+          return;
+        }
+
+        deleteSelectedButton.disabled = true;
+        deleteSelectedButton.textContent = "Deleting...";
+
+        let deleted = 0;
+        let failed = 0;
+
+        for (const path of items) {
+          const result = await deleteItemRequest(path);
+
+          if (result.ok) {
+            deleted += 1;
+            invalidateFolder(path);
+          } else {
+            failed += 1;
+            status.textContent = result.message;
+          }
+        }
+
+        invalidateFolder(currentPath);
+        selectedItems = new Set();
+        status.textContent = failed
+          ? `Deleted ${deleted} item${deleted === 1 ? "" : "s"}; ${failed} failed.`
+          : `Deleted ${deleted} item${deleted === 1 ? "" : "s"}.`;
+
+        deleteSelectedButton.textContent = "Delete selected";
+        updateSelectionControls();
+        await loadItems({ force: true });
       }
 
       function uploadFile(file, onProgress) {
@@ -637,6 +1205,7 @@
           const body = new FormData();
 
           body.append("file", file);
+          body.append("path", currentPath);
 
           request.upload.addEventListener("progress", (event) => {
             if (event.lengthComputable) {
@@ -705,182 +1274,6 @@
         uploadPanelActions.classList.toggle("is-visible", hasFailedUploads);
       }
 
-      function fileRows() {
-        return Array.from(list.querySelectorAll("li.file-row"));
-      }
-
-      function syncFileSelectionView() {
-        fileRows().forEach((row) => {
-          const isSelected = selectedFiles.has(row.dataset.filename);
-          const checkbox = row.querySelector(".select-file-checkbox");
-
-          row.classList.toggle("is-selected", isSelected);
-
-          if (checkbox) {
-            checkbox.checked = isSelected;
-          }
-        });
-      }
-
-      function updateSelectionControls() {
-        const selectedCount = selectedFiles.size;
-
-        syncFileSelectionView();
-        fileToolbar.classList.toggle("is-visible", selectedCount > 0);
-        selectionCount.textContent = `${selectedCount} selected`;
-        deleteSelectedButton.disabled = selectedCount === 0;
-      }
-
-      function selectFileRange(startIndex, endIndex) {
-        const start = Math.min(startIndex, endIndex);
-        const end = Math.max(startIndex, endIndex);
-
-        fileRows().forEach((row) => {
-          const rowIndex = Number(row.dataset.index);
-
-          if (rowIndex >= start && rowIndex <= end) {
-            selectedFiles.add(row.dataset.filename);
-          }
-        });
-      }
-
-      function handleFileSelection(filename, index, event, options = {}) {
-        const isRangeSelection = event.shiftKey && lastSelectedIndex !== null;
-        const isToggleSelection = event.metaKey || event.ctrlKey || options.checkbox;
-
-        if (isRangeSelection) {
-          selectFileRange(lastSelectedIndex, index);
-        } else if (isToggleSelection) {
-          if (selectedFiles.has(filename)) {
-            selectedFiles.delete(filename);
-          } else {
-            selectedFiles.add(filename);
-          }
-
-          lastSelectedIndex = index;
-        } else {
-          selectedFiles = new Set([filename]);
-          lastSelectedIndex = index;
-        }
-
-        updateSelectionControls();
-      }
-
-      function showEmptyFileList() {
-        const empty = document.createElement("li");
-        empty.className = "empty";
-        empty.textContent = "No files uploaded yet.";
-        list.className = "empty-list";
-        list.append(empty);
-      }
-
-      async function deleteFileRequest(filename) {
-        const response = await fetch(`/api/files/${encodeURIComponent(filename)}`, {
-          method: "DELETE",
-        });
-
-        if (response.ok) {
-          return { ok: true };
-        }
-
-        let data = {};
-
-        try {
-          data = await response.json();
-        } catch {
-          data = {};
-        }
-
-        return { ok: false, message: data.message || `Could not delete ${filename}.` };
-      }
-
-      function removeFileRow(filename, item, afterRemove) {
-        selectedFiles.delete(filename);
-        updateSelectionControls();
-
-        removeWithSwipe(item, () => {
-          if (!list.querySelector("li")) {
-            showEmptyFileList();
-          }
-
-          if (afterRemove) {
-            afterRemove();
-          }
-        });
-      }
-
-      async function deleteUploadedFile(filename, item, deleteButton) {
-        if (confirmSingleDelete.checked && !window.confirm(`Delete ${filename}?`)) {
-          return;
-        }
-
-        deleteButton.disabled = true;
-
-        const result = await deleteFileRequest(filename);
-
-        if (!result.ok) {
-          deleteButton.disabled = false;
-          status.textContent = result.message;
-          return;
-        }
-
-        status.textContent = `Deleted ${filename}.`;
-        removeFileRow(filename, item);
-      }
-
-      async function deleteSelectedFiles() {
-        const filenames = Array.from(selectedFiles);
-
-        if (!filenames.length) {
-          return;
-        }
-
-        if (confirmBulkDelete.checked && !window.confirm(`Delete ${filenames.length} selected file${filenames.length === 1 ? "" : "s"}?`)) {
-          return;
-        }
-
-        deleteSelectedButton.disabled = true;
-        deleteSelectedButton.textContent = "Deleting...";
-
-        let deleted = 0;
-        let failed = 0;
-
-        await Promise.all(filenames.map(async (filename, index) => {
-          const item = Array.from(list.querySelectorAll("li")).find((row) => row.dataset.filename === filename);
-
-          if (!item) {
-            selectedFiles.delete(filename);
-            return;
-          }
-
-          const result = await deleteFileRequest(filename);
-
-          if (result.ok) {
-            deleted += 1;
-            selectedFiles.delete(filename);
-            item.querySelectorAll("input, button").forEach((control) => {
-              control.disabled = true;
-            });
-            window.setTimeout(() => {
-              removeWithSwipe(item, () => {
-                if (!list.querySelector("li")) {
-                  showEmptyFileList();
-                }
-              });
-            }, index * 70);
-          } else {
-            failed += 1;
-            status.textContent = result.message;
-          }
-        }));
-
-        status.textContent = failed
-          ? `Deleted ${deleted} file${deleted === 1 ? "" : "s"}; ${failed} failed.`
-          : `Deleted ${deleted} file${deleted === 1 ? "" : "s"}.`;
-        deleteSelectedButton.textContent = "Delete selected";
-        updateSelectionControls();
-      }
-
       async function uploadQueue(files, runId) {
         const totalBytes = files.reduce((total, file) => total + file.size, 0);
         const loadedBytes = new Array(files.length).fill(0);
@@ -908,7 +1301,6 @@
         let succeeded = 0;
         let failed = 0;
         let nextIndex = 0;
-        let successExitOffset = 0;
 
         function updateOverall() {
           const loadedTotal = loadedBytes.reduce((total, loaded) => total + loaded, 0);
@@ -938,13 +1330,11 @@
               succeeded += 1;
               row.state.textContent = "Uploaded";
               row.progress.value = 100;
-              const exitDelay = 2000 + successExitOffset;
-              successExitOffset += 70;
               window.setTimeout(() => {
                 removeWithSwipe(row.row, () => {
                   hideUploadPanelIfEmpty(runId);
                 });
-              }, exitDelay);
+              }, 2000);
             } else {
               failed += 1;
               loadedBytes[row.index] = row.file.size;
@@ -980,16 +1370,15 @@
         return { succeeded, failed };
       }
 
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-
+      async function startSelectedUploads() {
         const files = Array.from(input.files);
 
         if (!files.length) {
           return;
         }
 
-        button.disabled = true;
+        chooseFilesButton.classList.add("is-disabled");
+        chooseFilesButton.setAttribute("aria-disabled", "true");
         input.disabled = true;
         window.clearTimeout(uploadPanelHideTimer);
         const runId = uploadRunId + 1;
@@ -1014,16 +1403,39 @@
             }, 2000);
           }
 
-          await loadFiles();
+          invalidateFolder(currentPath);
+          await loadItems({ force: true });
         } catch {
           status.textContent = "Upload failed.";
         } finally {
-          button.disabled = false;
           input.disabled = false;
+          input.value = "";
+          chooseFilesButton.classList.remove("is-disabled");
+          chooseFilesButton.removeAttribute("aria-disabled");
+        }
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+      });
+
+      input.addEventListener("change", () => {
+        startSelectedUploads();
+      });
+
+      document.addEventListener("click", (event) => {
+        if (!contextMenu.hidden && !contextMenu.contains(event.target)) {
+          hideContextMenu();
         }
       });
 
-      loadFiles();
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          hideContextMenu();
+        }
+      });
+
+      loadItems();
     </script>
   </body>
 </html>

@@ -15,24 +15,37 @@ UPLOAD_FOLDER.mkdir(exist_ok=True)
 UPLOAD_ROOT = UPLOAD_FOLDER.resolve()
 
 ALLOWED_EXTENSIONS = {
+    "3ds",
+    "3mf",
     "7z",
     "aac",
     "ai",
     "ape",
+    "amf",
     "avif",
     "avi",
+    "blend",
     "bmp",
     "bz2",
+    "cbddlp",
+    "ctb",
     "csv",
+    "dae",
     "doc",
     "docx",
     "eml",
     "epub",
+    "fbx",
     "flac",
     "gif",
+    "glb",
+    "gltf",
+    "gcode",
     "gz",
     "heic",
     "heif",
+    "iges",
+    "igs",
     "ics",
     "jpeg",
     "jpg",
@@ -47,17 +60,29 @@ ALLOWED_EXTENSIONS = {
     "mpeg",
     "mpg",
     "numbers",
+    "obj",
     "ods",
     "odt",
     "ogg",
     "pages",
     "pdf",
+    "ply",
     "png",
     "ppt",
     "pptx",
+    "photon",
+    "photons",
+    "pwmo",
+    "pwmx",
+    "pws",
     "psd",
     "rar",
     "rtf",
+    "scad",
+    "slc",
+    "step",
+    "stl",
+    "stp",
     "svg",
     "tar",
     "tif",
@@ -69,6 +94,8 @@ ALLOWED_EXTENSIONS = {
     "webp",
     "wma",
     "wmv",
+    "wrl",
+    "x3d",
     "xls",
     "xlsx",
     "xml",
@@ -175,9 +202,29 @@ def handle_http_error(error):
     return jsonify({"message": error.description}), error.code
 
 
+def render_browser(relative_path=""):
+    folder = resolve_upload_path(relative_path)
+
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+
+    current_path = "" if folder == UPLOAD_ROOT else folder.relative_to(UPLOAD_ROOT).as_posix()
+    return render_template("index.html", current_path=current_path)
+
+
 @app.get("/")
 def index():
-    return render_template("index.html")
+    return render_browser()
+
+
+@app.get("/browse/")
+def browse_root():
+    return render_browser()
+
+
+@app.get("/browse/<path:relative_path>")
+def browse(relative_path):
+    return render_browser(relative_path)
 
 
 @app.get("/api/hello")
