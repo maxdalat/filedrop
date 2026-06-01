@@ -1,6 +1,13 @@
 :root {
-  color-scheme: light dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 * {
@@ -88,7 +95,12 @@ button:disabled,
   height: 40px;
   padding: 4px 12px 4px 5px;
   border-radius: 999px;
-  background: #1f2933;
+  border: 1px solid #dbe1e8;
+  background: rgb(255 255 255 / 88%);
+  color: #334155;
+  box-shadow: 0 5px 18px rgb(31 41 51 / 9%);
+  font-size: 0.9rem;
+  font-weight: 500;
 }
 
 .avatar {
@@ -139,7 +151,10 @@ button:disabled,
   height: 40px;
   padding: 0;
   border-radius: 999px;
-  background: #1f2933;
+  border: 1px solid #dbe1e8;
+  background: rgb(255 255 255 / 88%);
+  color: #64748b;
+  box-shadow: 0 5px 18px rgb(31 41 51 / 9%);
   font-size: 1.1rem;
   line-height: 1;
 }
@@ -148,16 +163,47 @@ button:disabled,
   position: absolute;
   top: 48px;
   right: 0;
-  width: min(86vw, 280px);
-  padding: 16px;
+  width: min(86vw, 300px);
+  padding: 14px;
   border: 1px solid #d1d5db;
-  border-radius: 8px;
-  background: #ffffff;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 94%);
   box-shadow: 0 16px 40px rgb(31 41 51 / 16%);
 }
 
 .settings-panel[hidden] {
   display: none;
+}
+
+.settings-heading {
+  margin-bottom: 14px;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.setting-group {
+  margin-bottom: 16px;
+}
+
+.setting-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #475569;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.setting-group select {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  font: inherit;
 }
 
 .setting-row {
@@ -166,7 +212,9 @@ button:disabled,
   align-items: center;
   gap: 12px;
   margin-bottom: 10px;
-  font-weight: 600;
+  color: #475569;
+  font-size: 0.88rem;
+  font-weight: 550;
 }
 
 .setting-row:last-child {
@@ -358,18 +406,37 @@ li.is-removing {
   align-items: center;
 }
 
-.new-folder-button {
-  background: #166534;
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  margin: 10px 0 18px;
+  color: #64748b;
+  font-size: 1.14rem;
 }
 
-.current-path {
-  color: #5b6472;
-  font-weight: 500;
-}
-
-.current-path strong {
-  color: #1f2933;
+.breadcrumb-link {
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: transparent;
+  color: #166534;
   font-weight: 600;
+}
+
+.breadcrumb-link:hover,
+.breadcrumb-link:focus-visible {
+  background: #e8f5ee;
+}
+
+.breadcrumb-current {
+  color: #334155;
+  font-size: 1.08em;
+  font-weight: 700;
+}
+
+.breadcrumb-separator {
+  color: #94a3b8;
 }
 
 .file-toolbar {
@@ -442,6 +509,7 @@ li {
 
 li.file-row {
   cursor: pointer;
+  transition: opacity 160ms ease, transform 160ms ease, max-height 160ms ease, padding 160ms ease, border-width 160ms ease, background-color 120ms ease, outline-color 120ms ease;
 }
 
 li.file-row:hover {
@@ -450,6 +518,65 @@ li.file-row:hover {
 
 li.file-row.is-selected {
   background: #e8f5ee;
+}
+
+.folder-popover {
+  position: fixed;
+  z-index: 6;
+  width: min(92vw, 360px);
+  padding: 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 16px 40px rgb(31 41 51 / 18%);
+}
+
+.folder-popover[hidden] {
+  display: none;
+}
+
+.folder-popover label {
+  display: block;
+  margin-bottom: 8px;
+  color: #475569;
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+.folder-popover-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.folder-popover input {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 9px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #fff;
+  color: #1f2933;
+  font: inherit;
+}
+
+.folder-popover button {
+  padding: 9px 11px;
+}
+
+.folder-popover-cancel {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #475569;
+}
+
+li.file-row.is-drop-target,
+#file-list.is-drop-target,
+.breadcrumb-link.is-drop-target,
+.breadcrumb-current.is-drop-target {
+  outline: 2px dashed #16a34a;
+  outline-offset: -4px;
+  background: #dcfce7;
+  transition: background-color 120ms ease, outline-color 120ms ease;
 }
 
 .select-file-checkbox {
@@ -563,90 +690,147 @@ a {
   font-weight: 600;
 }
 
-@media (prefers-color-scheme: dark) {
-  body {
+html[data-theme="dark"] body {
     background: #111827;
     color: #f9fafb;
-  }
+}
 
-  .settings-panel,
-  .account-panel,
-  .upload-panel,
-  .context-menu {
+html[data-theme="dark"] .settings-panel,
+html[data-theme="dark"] .account-panel,
+html[data-theme="dark"] .upload-panel,
+html[data-theme="dark"] .context-menu {
     border-color: #374151;
     background: rgb(31 41 55 / 82%);
-  }
+}
 
-  .clear-failed-button {
+html[data-theme="dark"] .account-toggle,
+html[data-theme="dark"] .settings-toggle {
+  border-color: #374151;
+  background: rgb(31 41 55 / 88%);
+  color: #cbd5e1;
+}
+
+html[data-theme="dark"] .settings-heading,
+html[data-theme="dark"] .setting-label,
+html[data-theme="dark"] .setting-row {
+  color: #cbd5e1;
+}
+
+html[data-theme="dark"] .setting-group select {
+  border-color: #4b5563;
+  background: #111827;
+  color: #f9fafb;
+}
+
+html[data-theme="dark"] .folder-popover {
+  border-color: #374151;
+  background: #1f2937;
+}
+
+html[data-theme="dark"] .folder-popover label {
+  color: #cbd5e1;
+}
+
+html[data-theme="dark"] .folder-popover input {
+  border-color: #4b5563;
+  background: #111827;
+  color: #f9fafb;
+}
+
+html[data-theme="dark"] .folder-popover-cancel {
+  border-color: #4b5563;
+  background: #111827;
+  color: #cbd5e1;
+}
+
+html[data-theme="dark"] .clear-failed-button {
     border-color: #4b5563;
     background: rgb(17 24 39 / 72%);
     color: #f9fafb;
-  }
+}
 
-  .dismiss-upload-button {
+html[data-theme="dark"] .dismiss-upload-button {
     color: #9ca3af;
-  }
+}
 
-  .dismiss-upload-button:hover,
-  .dismiss-upload-button:focus-visible {
+html[data-theme="dark"] .dismiss-upload-button:hover,
+html[data-theme="dark"] .dismiss-upload-button:focus-visible {
     background: #450a0a;
     color: #fca5a5;
-  }
+}
 
-  progress,
-  progress::-webkit-progress-bar {
+html[data-theme="dark"] progress,
+html[data-theme="dark"] progress::-webkit-progress-bar {
     background: #374151;
-  }
+}
 
-  .upload-list,
-  .upload-item,
-  ul,
-  li {
+html[data-theme="dark"] .upload-list,
+html[data-theme="dark"] .upload-item,
+html[data-theme="dark"] ul,
+html[data-theme="dark"] li {
     border-color: #374151;
-  }
+}
 
-  li.file-row:hover {
+html[data-theme="dark"] li.file-row:hover {
     background: #182231;
-  }
+}
 
-  li.file-row.is-selected {
+html[data-theme="dark"] li.file-row.is-selected {
     background: #123524;
-  }
+}
 
-  .item-action-link,
-  .item-action-button,
-  .account-panel a,
-  .account-panel button,
-  .context-menu button {
+html[data-theme="dark"] li.file-row.is-drop-target,
+html[data-theme="dark"] #file-list.is-drop-target,
+html[data-theme="dark"] .breadcrumb-link.is-drop-target,
+html[data-theme="dark"] .breadcrumb-current.is-drop-target {
+  background: #123524;
+}
+
+html[data-theme="dark"] .item-action-link,
+html[data-theme="dark"] .item-action-button,
+html[data-theme="dark"] .account-panel a,
+html[data-theme="dark"] .account-panel button,
+html[data-theme="dark"] .context-menu button {
     background: #111827;
     color: #f9fafb;
-  }
+}
 
-  .item-action-link,
-  .item-action-button.open {
+html[data-theme="dark"] .item-action-link,
+html[data-theme="dark"] .item-action-button.open {
     border-color: #4b5563;
-  }
+    background: #1f2937;
+    color: #f9fafb;
+}
 
-  .item-action-button.delete:hover,
-  .item-action-button.delete:focus-visible {
+html[data-theme="dark"] .item-action-button.delete:hover,
+html[data-theme="dark"] .item-action-button.delete:focus-visible {
     background: #450a0a;
     color: #fca5a5;
-  }
+}
 
-  .context-menu button:hover,
-  .context-menu button:focus-visible {
+html[data-theme="dark"] .context-menu button:hover,
+html[data-theme="dark"] .context-menu button:focus-visible {
     background: #182231;
-  }
+}
 
-  a {
+html[data-theme="dark"] a,
+html[data-theme="dark"] .breadcrumb-link {
     color: #86efac;
-  }
+}
 
-  .empty,
-  .upload-state,
-  .selection-count,
-  .select-all-control,
-  .current-path {
+html[data-theme="dark"] .breadcrumb-link:hover,
+html[data-theme="dark"] .breadcrumb-link:focus-visible {
+  background: #123524;
+}
+
+html[data-theme="dark"] .breadcrumb-current {
+  color: #f9fafb;
+}
+
+html[data-theme="dark"] .empty,
+html[data-theme="dark"] .upload-state,
+html[data-theme="dark"] .selection-count,
+html[data-theme="dark"] .select-all-control,
+html[data-theme="dark"] .breadcrumbs {
     color: #cbd5e1;
-  }
 }

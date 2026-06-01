@@ -1,16 +1,23 @@
 window.FILEDROP_CONFIG = Object.freeze({
   animationDurationMs: 180,
+  autoScrollEdgeSize: 96,
+  autoScrollMaxSpeed: 18,
   contextMenuFallbackHeight: 80,
   contextMenuFallbackWidth: 180,
   contextMenuMargin: 8,
+  draggedItemsType: "application/x-filedrop-items",
   defaultParallelUploads: 3,
   maxParallelUploads: 99,
   minParallelUploads: 1,
+  parentPreloadFallbackDelayMs: 120,
+  preloadAllFolderLimit: 7,
   progressMaximum: 100,
   storageKeys: Object.freeze({
     confirmBulkDelete: "confirmBulkDelete",
     confirmSingleDelete: "confirmSingleDelete",
+    conflictMode: "conflictMode",
     parallelUploads: "parallelUploads",
+    theme: "theme",
   }),
   uploadedRowVisibleMs: 2000,
 });

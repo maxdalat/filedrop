@@ -1,4 +1,6 @@
 :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2933; }
+html[data-theme="light"] { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; background: #f7f7f4; }
 main { width: min(100%, 440px); padding: 30px; border: 1px solid #d1d5db; border-radius: 14px; background: #fff; box-shadow: 0 16px 40px rgb(31 41 51 / 10%); }
@@ -10,3 +12,9 @@ button, .button { display: inline-flex; justify-content: center; margin-top: 20p
 .error { padding: 10px 12px; border-radius: 8px; background: #fee2e2; color: #991b1b; }
 .muted { color: #5b6472; }
 a { color: #14532d; font-weight: 650; }
+html[data-theme="dark"] body { background: #111827; color: #f9fafb; }
+html[data-theme="dark"] main { border-color: #374151; background: #1f2937; box-shadow: 0 16px 40px rgb(0 0 0 / 24%); }
+html[data-theme="dark"] input { border-color: #4b5563; background: #111827; color: #f9fafb; }
+html[data-theme="dark"] .error { background: #450a0a; color: #fca5a5; }
+html[data-theme="dark"] .muted { color: #cbd5e1; }
+html[data-theme="dark"] a { color: #86efac; }

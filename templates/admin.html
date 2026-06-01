@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Manage accounts | Filedrop</title>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
   </head>
   <body>
@@ -37,6 +38,10 @@
                 {% if item.status == "approved" and item.role != "admin" %}
                   <form method="post" action="{{ url_for('promote_user', user_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="promote">Make admin</button></form>
                 {% endif %}
+                {% if item.role == "admin" and not item.is_initial_admin %}
+                  <form method="post" action="{{ url_for('demote_user', user_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="demote">Remove admin</button></form>
+                {% endif %}
+                {% if item.is_initial_admin %}<span class="protected-role">Initial admin</span>{% endif %}
               </td>
             </tr>
           {% endfor %}

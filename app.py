@@ -103,6 +103,7 @@ def init_db():
             role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
             status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
             must_change_password INTEGER NOT NULL DEFAULT 0,
+            is_initial_admin INTEGER NOT NULL DEFAULT 0,
             avatar_color TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
@@ -115,6 +116,13 @@ def init_db():
         );
         """
     )
+    user_columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
+    if "is_initial_admin" not in user_columns:
+        db.execute("ALTER TABLE users ADD COLUMN is_initial_admin INTEGER NOT NULL DEFAULT 0")
+    if not db.execute("SELECT 1 FROM users WHERE is_initial_admin = 1").fetchone():
+        first_admin = db.execute("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").fetchone()
+        if first_admin:
+            db.execute("UPDATE users SET is_initial_admin = 1 WHERE id = ?", (first_admin["id"],))
     db.execute("DELETE FROM sessions WHERE expires_at <= ?", (iso_time(utc_now()),))
     db.commit()
 
@@ -342,6 +350,50 @@ def available_filename(folder, filename):
     return f"{stem}_{counter}{suffix}"
 
 
+def available_item_path(folder, item_path):
+    destination = folder / item_path.name
+    if not destination.exists():
+        return destination
+    stem, suffix, counter = item_path.stem, item_path.suffix, 1
+    while (folder / f"{stem}_{counter}{suffix}").exists():
+        counter += 1
+    return folder / f"{stem}_{counter}{suffix}"
+
+
+def prepare_item_moves(item_paths, destination_folder, replace_existing=False):
+    root = accessible_root()
+    moves = []
+    for relative_path in item_paths:
+        if not isinstance(relative_path, str):
+            abort(400, description="Item paths must be text.")
+        item_path = resolve_upload_path(relative_path)
+        if item_path == root or not item_path.exists():
+            abort(404, description="File or folder was not found.")
+        if item_path == destination_folder or (item_path.is_dir() and item_path in destination_folder.parents):
+            abort(400, description="A folder cannot be moved into itself.")
+        destination = destination_folder / item_path.name
+        if destination.exists() and destination != item_path and not replace_existing:
+            destination = available_item_path(destination_folder, item_path)
+        moves.append((item_path, destination))
+
+    source_paths = [item_path for item_path, _destination in moves]
+    if any(parent != child and parent in child.parents for parent in source_paths for child in source_paths):
+        abort(400, description="Move a folder or its contents, not both at the same time.")
+    return moves
+
+
+def execute_item_moves(moves, replace_existing=False):
+    moved = 0
+    for item_path, destination in moves:
+        if item_path == destination:
+            continue
+        if replace_existing and destination.exists():
+            shutil.rmtree(destination) if destination.is_dir() else destination.unlink()
+        item_path.rename(destination)
+        moved += 1
+    return moved
+
+
 def render_browser(relative_path=""):
     folder = resolve_upload_path(relative_path)
     if not folder.exists() or not folder.is_dir():
@@ -387,8 +439,8 @@ def setup_post():
             return redirect(url_for("login"))
         cursor = db.execute(
             """INSERT INTO users
-               (username, email, password_hash, role, status, avatar_color, created_at)
-               VALUES (?, ?, ?, 'admin', 'approved', ?, ?)""",
+               (username, email, password_hash, role, status, is_initial_admin, avatar_color, created_at)
+               VALUES (?, ?, ?, 'admin', 'approved', 1, ?, ?)""",
             (username, email, generate_password_hash(password, method=PASSWORD_HASH_METHOD), aesthetic_color(username), iso_time(utc_now())),
         )
         db.commit()
@@ -528,6 +580,19 @@ def promote_user(user_id):
     return redirect(url_for("admin"))
 
 
+@app.post("/admin/users/<int:user_id>/demote")
+@admin_required
+def demote_user(user_id):
+    user = get_db().execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        abort(404, description="User was not found.")
+    if user["is_initial_admin"]:
+        abort(409, description="The initial administrator cannot be demoted.")
+    get_db().execute("UPDATE users SET role = 'user' WHERE id = ?", (user_id,))
+    get_db().commit()
+    return redirect(url_for("admin"))
+
+
 @app.get("/")
 @login_required
 def index():
@@ -577,6 +642,27 @@ def create_folder():
     return jsonify(item_payload(new_folder)), 201
 
 
+@app.post("/api/folders/from-selection")
+@login_required
+def create_folder_from_selection():
+    data = request.get_json(silent=True) or {}
+    folder, name = resolve_upload_path(data.get("path", "")), data.get("name", "")
+    item_paths = data.get("paths", [])
+    validate_name(name, "Folder names")
+    if not isinstance(item_paths, list) or not item_paths:
+        abort(400, description="Select at least one file or folder.")
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+    new_folder = folder / name
+    if new_folder.exists():
+        abort(409, description="A file or folder with that name already exists.")
+    replace_existing = data.get("replace") is True
+    moves = prepare_item_moves(item_paths, new_folder, replace_existing=replace_existing)
+    new_folder.mkdir()
+    moved = execute_item_moves(moves, replace_existing=replace_existing)
+    return jsonify({"folder": item_payload(new_folder), "moved": moved}), 201
+
+
 @app.patch("/api/items")
 @login_required
 def rename_item():
@@ -590,6 +676,22 @@ def rename_item():
         abort(409, description="A file or folder with that name already exists.")
     item_path.rename(destination)
     return jsonify(item_payload(destination))
+
+
+@app.post("/api/items/move")
+@login_required
+def move_items():
+    data = request.get_json(silent=True) or {}
+    destination_folder = resolve_upload_path(data.get("destination", ""))
+    item_paths = data.get("paths", [])
+    if not isinstance(item_paths, list) or not item_paths:
+        abort(400, description="Select at least one file or folder to move.")
+    if not destination_folder.exists() or not destination_folder.is_dir():
+        abort(404, description="Destination folder was not found.")
+
+    replace_existing = data.get("replace") is True
+    moves = prepare_item_moves(item_paths, destination_folder, replace_existing=replace_existing)
+    return jsonify({"moved": execute_item_moves(moves, replace_existing=replace_existing)})
 
 
 @app.delete("/api/items")
@@ -609,7 +711,11 @@ def upload_file():
     folder = resolve_upload_path(request.form.get("path", ""))
     if not folder.exists() or not folder.is_dir():
         abort(404, description="Folder was not found.")
-    saved_filename = available_filename(folder, filename)
+    replace_existing = request.form.get("replace", "").lower() in {"1", "true", "yes"}
+    saved_filename = filename if replace_existing else available_filename(folder, filename)
+    destination = folder / saved_filename
+    if replace_existing and destination.exists() and destination.is_dir():
+        abort(409, description="A folder with that name already exists.")
     request.files["file"].save(folder / saved_filename)
     return jsonify({"filename": saved_filename, "path": (folder / saved_filename).relative_to(accessible_root()).as_posix()}), 201
 

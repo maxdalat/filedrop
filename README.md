@@ -36,6 +36,12 @@ New users request an account with a username, email address, and password. The a
 
 An administrator can issue a temporary password or promote an approved user to administrator from the account-management page. Temporary passwords are displayed once, existing sessions are revoked, and the user must choose a new password after signing in.
 
+The initial administrator can never be demoted. Other administrators can be promoted or demoted from the account-management page.
+
+Files can be dragged into folders, and selected items can be grouped into a new folder. The file-browser settings let each user keep duplicate names as numbered copies or replace existing items.
+
+The appearance setting is remembered in the browser and applies to every page. New browsers follow the operating-system theme until a preference is chosen.
+
 ## Optional Paths
 
 For a non-Docker deployment, runtime directories can be moved with:

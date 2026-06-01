@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token }}">
     <title>Filedrop</title>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
+    <link rel="prefetch" href="{{ url_for('change_password') }}">
   </head>
   <body data-current-path="{{ current_path|default('', true) }}">
     <div class="account">
@@ -23,8 +25,24 @@
       </div>
     </div>
     <div class="settings">
-      <button class="settings-toggle" type="button" id="settings-toggle" aria-label="Upload settings" aria-expanded="false" aria-controls="settings-panel">⚙</button>
+      <button class="settings-toggle" type="button" id="settings-toggle" aria-label="Settings" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
       <div class="settings-panel" id="settings-panel" hidden>
+        <div class="settings-heading">Preferences</div>
+        <div class="setting-group">
+          <label class="setting-label" for="theme-select">Appearance</label>
+          <select id="theme-select">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="conflict-select">When a name already exists</label>
+          <select id="conflict-select">
+            <option value="add">Keep both files</option>
+            <option value="replace">Replace existing item</option>
+          </select>
+        </div>
         <div class="setting-row">
           <label for="parallel-uploads">Uploads at once</label>
           <span id="parallel-value"></span>
@@ -61,16 +79,15 @@
 
       <p class="status" id="status"></p>
 
+      <nav class="breadcrumbs" id="breadcrumbs" aria-label="Current folder"></nav>
+
       <div class="folder-toolbar">
         <div class="folder-toolbar-actions">
           <form class="upload-form" id="upload-form">
             <label class="choose-files-button" id="choose-files-button" for="file-input">Upload files</label>
             <input class="file-input" type="file" name="file" id="file-input" multiple>
           </form>
-          <button class="new-folder-button" type="button" id="new-folder-button">+ New folder</button>
-          <button type="button" id="up-button" disabled>↑ Up</button>
         </div>
-        <span class="current-path" id="current-path-label">Current folder: <strong>Root</strong></span>
       </div>
 
       <div class="file-toolbar" id="file-toolbar">
@@ -86,6 +103,14 @@
 
       <ul id="file-list"></ul>
       <div class="context-menu" id="context-menu" hidden></div>
+      <form class="folder-popover" id="folder-popover" hidden>
+        <label for="folder-name-input" id="folder-popover-label">Create folder</label>
+        <div class="folder-popover-controls">
+          <input id="folder-name-input" autocomplete="off" maxlength="255">
+          <button type="submit">Create</button>
+          <button class="folder-popover-cancel" type="button" id="folder-popover-cancel">Cancel</button>
+        </div>
+      </form>
     </main>
 
     <script src="{{ url_for('static', filename='js/config.js') }}" defer></script>
