@@ -9,60 +9,68 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
     <link rel="prefetch" href="{{ url_for('change_password') }}">
   </head>
-  <body data-current-path="{{ current_path|default('', true) }}">
-    <div class="account">
-      <button class="account-toggle" type="button" id="account-toggle" aria-label="Account menu" aria-expanded="false" aria-controls="account-panel">
-        <span class="avatar" style="background: {{ user.avatar_color }}">{{ user.username[0]|upper }}</span>
-        <span>{{ user.username }}</span>
-      </button>
-      <div class="account-panel" id="account-panel" hidden>
-        {% if user.role == "admin" %}<a href="{{ url_for('admin') }}">Manage accounts</a>{% endif %}
-        <a href="{{ url_for('change_password') }}">Change password</a>
-        <form method="post" action="{{ url_for('logout') }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button type="submit">Sign out</button>
-        </form>
+  <body class="{{ 'full-view' if preferences.fullView else '' }}" data-current-path="{{ current_path|default('', true) }}">
+    <header class="site-header">
+      <div class="site-header-inner">
+        <div class="site-brand">Filedrop</div>
+        <div class="header-actions">
+          <div class="account">
+            <button class="account-toggle" type="button" id="account-toggle" aria-label="Account menu" aria-expanded="false" aria-controls="account-panel">
+              <span class="avatar" style="background: {{ user.avatar_color }}">{{ user.username[0]|upper }}</span>
+              <span>{{ user.username }}</span>
+            </button>
+            <div class="account-panel" id="account-panel" hidden>
+              {% if user.role == "admin" %}<a href="{{ url_for('admin') }}">Manage accounts</a>{% endif %}
+              <a href="{{ url_for('change_password') }}">Change password</a>
+              <form method="post" action="{{ url_for('logout') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit">Sign out</button>
+              </form>
+            </div>
+          </div>
+          <div class="settings">
+            <button class="settings-toggle" type="button" id="settings-toggle" aria-label="Settings" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
+            <div class="settings-panel" id="settings-panel" hidden>
+              <div class="settings-heading">Preferences</div>
+              <div class="setting-group">
+                <label class="setting-label" for="theme-select">Appearance</label>
+                <select id="theme-select">
+                  <option value="system">System</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </div>
+              <div class="setting-group">
+                <label class="setting-label" for="conflict-select">When a name already exists</label>
+                <select id="conflict-select">
+                  <option value="add">Keep both files</option>
+                  <option value="replace">Replace existing item</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <label for="parallel-uploads">Uploads at once</label>
+                <span id="parallel-value"></span>
+              </div>
+              <input type="range" id="parallel-uploads">
+              <div class="setting-row">
+                <label for="confirm-single-delete">Confirm single deletes</label>
+                <input type="checkbox" id="confirm-single-delete" checked>
+              </div>
+              <div class="setting-row">
+                <label for="confirm-bulk-delete">Confirm multiple deletes</label>
+                <input type="checkbox" id="confirm-bulk-delete" checked>
+              </div>
+              <div class="setting-row">
+                <label for="full-view">Use full-width file view</label>
+                <input type="checkbox" id="full-view">
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="settings">
-      <button class="settings-toggle" type="button" id="settings-toggle" aria-label="Settings" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
-      <div class="settings-panel" id="settings-panel" hidden>
-        <div class="settings-heading">Preferences</div>
-        <div class="setting-group">
-          <label class="setting-label" for="theme-select">Appearance</label>
-          <select id="theme-select">
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </div>
-        <div class="setting-group">
-          <label class="setting-label" for="conflict-select">When a name already exists</label>
-          <select id="conflict-select">
-            <option value="add">Keep both files</option>
-            <option value="replace">Replace existing item</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label for="parallel-uploads">Uploads at once</label>
-          <span id="parallel-value"></span>
-        </div>
-        <input type="range" id="parallel-uploads">
-        <div class="setting-row">
-          <label for="confirm-single-delete">Confirm single deletes</label>
-          <input type="checkbox" id="confirm-single-delete" checked>
-        </div>
-        <div class="setting-row">
-          <label for="confirm-bulk-delete">Confirm multiple deletes</label>
-          <input type="checkbox" id="confirm-bulk-delete" checked>
-        </div>
-      </div>
-    </div>
+    </header>
 
     <main>
-      <h1>Filedrop</h1>
-      <p>Upload files, organize folders, and manage items in the upload folder.</p>
-
       <div class="upload-panel" id="upload-panel">
         <div class="upload-panel-actions" id="upload-panel-actions">
           <button class="clear-failed-button" type="button" id="clear-failed-button">Clear all failed uploads</button>
@@ -76,6 +84,7 @@
         </div>
         <div class="upload-list" id="upload-list"></div>
       </div>
+      <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
       <p class="status" id="status"></p>
 
@@ -84,8 +93,13 @@
       <div class="folder-toolbar">
         <div class="folder-toolbar-actions">
           <form class="upload-form" id="upload-form">
-            <label class="choose-files-button" id="choose-files-button" for="file-input">Upload files</label>
+            <button class="choose-files-button" id="choose-upload-button" type="button" aria-expanded="false" aria-controls="upload-choice-menu">Upload</button>
+            <div class="upload-choice-menu" id="upload-choice-menu" hidden>
+              <button type="button" id="choose-files-button">Files</button>
+              <button type="button" id="choose-folder-button">Folder</button>
+            </div>
             <input class="file-input" type="file" name="file" id="file-input" multiple>
+            <input class="file-input" type="file" id="folder-input" webkitdirectory multiple>
           </form>
         </div>
       </div>
@@ -96,6 +110,13 @@
           <span>Select all</span>
         </label>
         <div class="file-toolbar-actions">
+          <div class="sort-controls" aria-label="Sort files">
+            <span class="sort-label">Sort</span>
+            <button class="sort-button" type="button" data-sort="name" data-label="Name">Name</button>
+            <button class="sort-button" type="button" data-sort="modified" data-label="Date &amp; time">Date &amp; time</button>
+            <button class="sort-button" type="button" data-sort="size" data-label="Size">Size</button>
+            <button class="sort-button" type="button" data-sort="extension" data-label="Extension">Extension</button>
+          </div>
           <span class="selection-count" id="selection-count">0 selected</span>
           <button class="delete-selected-button" type="button" id="delete-selected-button" disabled>Delete selected</button>
         </div>
@@ -111,8 +132,17 @@
           <button class="folder-popover-cancel" type="button" id="folder-popover-cancel">Cancel</button>
         </div>
       </form>
+      <form class="rename-popover" id="rename-popover" hidden>
+        <label for="rename-input">Rename item</label>
+        <div class="rename-popover-controls">
+          <input id="rename-input" autocomplete="off" maxlength="255">
+          <button type="submit">Rename</button>
+          <button class="rename-popover-cancel" type="button" id="rename-popover-cancel">Cancel</button>
+        </div>
+      </form>
     </main>
 
+    <script>window.FILEDROP_PREFERENCES = {{ preferences|tojson }};</script>
     <script src="{{ url_for('static', filename='js/config.js') }}" defer></script>
     <script src="{{ url_for('static', filename='js/index.js') }}" defer></script>
   </body>

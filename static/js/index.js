@@ -12,10 +12,15 @@ window.fetch = (resource, options = {}) => {
 };
 const form = document.querySelector("#upload-form");
 const input = document.querySelector("#file-input");
+const chooseUploadButton = document.querySelector("#choose-upload-button");
+const uploadChoiceMenu = document.querySelector("#upload-choice-menu");
 const chooseFilesButton = document.querySelector("#choose-files-button");
+const folderInput = document.querySelector("#folder-input");
+const chooseFolderButton = document.querySelector("#choose-folder-button");
 const status = document.querySelector("#status");
 const uploadPanel = document.querySelector("#upload-panel");
 const uploadPanelActions = document.querySelector("#upload-panel-actions");
+const toastContainer = document.querySelector("#toast-container");
 const clearFailedButton = document.querySelector("#clear-failed-button");
 const uploadList = document.querySelector("#upload-list");
 const list = document.querySelector("#file-list");
@@ -31,8 +36,10 @@ const confirmSingleDelete = document.querySelector("#confirm-single-delete");
 const confirmBulkDelete = document.querySelector("#confirm-bulk-delete");
 const themeSelect = document.querySelector("#theme-select");
 const conflictSelect = document.querySelector("#conflict-select");
+const fullView = document.querySelector("#full-view");
 const fileToolbar = document.querySelector("#file-toolbar");
 const selectAllCheckbox = document.querySelector("#select-all-checkbox");
+const sortButtons = Array.from(document.querySelectorAll(".sort-button"));
 const selectionCount = document.querySelector("#selection-count");
 const deleteSelectedButton = document.querySelector("#delete-selected-button");
 const breadcrumbs = document.querySelector("#breadcrumbs");
@@ -43,12 +50,17 @@ const folderPopover = document.querySelector("#folder-popover");
 const folderPopoverLabel = document.querySelector("#folder-popover-label");
 const folderNameInput = document.querySelector("#folder-name-input");
 const folderPopoverCancel = document.querySelector("#folder-popover-cancel");
+const renamePopover = document.querySelector("#rename-popover");
+const renameInput = document.querySelector("#rename-input");
+const renamePopoverCancel = document.querySelector("#rename-popover-cancel");
+let renameItemPath;
 
-const savedParallelUploads = Number.parseInt(localStorage.getItem(config.storageKeys.parallelUploads), 10);
-const savedConfirmSingleDelete = localStorage.getItem(config.storageKeys.confirmSingleDelete);
-const savedConfirmBulkDelete = localStorage.getItem(config.storageKeys.confirmBulkDelete);
-const savedTheme = localStorage.getItem(config.storageKeys.theme);
-const savedConflictMode = localStorage.getItem(config.storageKeys.conflictMode);
+const accountPreferences = window.FILEDROP_PREFERENCES || {};
+const savedParallelUploads = Number.parseInt(accountPreferences.parallelUploads, 10);
+const savedConfirmSingleDelete = accountPreferences.confirmSingleDelete;
+const savedConfirmBulkDelete = accountPreferences.confirmBulkDelete;
+const savedTheme = accountPreferences.theme;
+const savedConflictMode = accountPreferences.conflictMode;
 let parallelUploads = Number.isInteger(savedParallelUploads)
   ? Math.min(config.maxParallelUploads, Math.max(config.minParallelUploads, savedParallelUploads))
   : config.defaultParallelUploads;
@@ -57,30 +69,110 @@ let uploadRunId = 0;
 let selectedItems = new Set();
 let lastSelectedPath = null;
 let currentPath = document.body.dataset.currentPath || "";
+let sortBy = ["manual", "name", "modified", "size", "extension"].includes(accountPreferences.sortBy)
+  ? accountPreferences.sortBy
+  : "manual";
+let sortDirection = accountPreferences.sortDirection === "desc" ? "desc" : "asc";
 const itemCache = new Map();
 const pendingItemLoads = new Map();
+
+function closeUploadChoiceMenu() {
+  uploadChoiceMenu.hidden = true;
+  chooseUploadButton.setAttribute("aria-expanded", "false");
+}
+
+chooseUploadButton.addEventListener("click", () => {
+  const isOpen = uploadChoiceMenu.hidden;
+  uploadChoiceMenu.hidden = !isOpen;
+  chooseUploadButton.setAttribute("aria-expanded", String(isOpen));
+});
+
+chooseFilesButton.addEventListener("click", () => {
+  closeUploadChoiceMenu();
+  input.click();
+});
+
+chooseFolderButton.addEventListener("click", () => {
+  closeUploadChoiceMenu();
+  folderInput.click();
+});
+
+function updateToastPosition() {
+  const bottom = uploadPanel.classList.contains("is-visible") ? uploadPanel.offsetHeight + 28 : 16;
+  toastContainer.style.bottom = `${bottom}px`;
+}
+
+function showToast(message) {
+  const toast = document.createElement("div");
+  toast.className = "action-toast";
+  toast.textContent = message;
+  toastContainer.append(toast);
+  updateToastPosition();
+  window.requestAnimationFrame(() => toast.classList.add("is-visible"));
+  window.setTimeout(() => {
+    toast.classList.add("is-removing");
+    window.setTimeout(() => toast.remove(), config.animationDurationMs);
+  }, config.toastVisibleMs);
+}
+
+new MutationObserver(updateToastPosition).observe(uploadPanel, { attributes: true, attributeFilter: ["class"] });
+window.addEventListener("resize", updateToastPosition);
 
 parallelSlider.min = String(config.minParallelUploads);
 parallelSlider.max = String(config.maxParallelUploads);
 parallelSlider.value = String(parallelUploads);
 parallelValue.textContent = String(parallelUploads);
-confirmSingleDelete.checked = savedConfirmSingleDelete === null ? true : savedConfirmSingleDelete === "true";
-confirmBulkDelete.checked = savedConfirmBulkDelete === null ? true : savedConfirmBulkDelete === "true";
+confirmSingleDelete.checked = savedConfirmSingleDelete ?? true;
+confirmBulkDelete.checked = savedConfirmBulkDelete ?? true;
 themeSelect.value = ["light", "dark", "system"].includes(savedTheme) ? savedTheme : "system";
 conflictSelect.value = savedConflictMode === "replace" ? "replace" : "add";
+fullView.checked = accountPreferences.fullView === true;
+updateSortButtons();
+document.body.classList.toggle("full-view", fullView.checked);
 window.FILEDROP_THEME.apply(themeSelect.value);
 
 settingsToggle.addEventListener("click", () => {
   const isOpen = settingsPanel.hidden;
+  closeAccountPanel();
   settingsPanel.hidden = !isOpen;
   settingsToggle.setAttribute("aria-expanded", String(isOpen));
 });
 
 accountToggle.addEventListener("click", () => {
   const isOpen = accountPanel.hidden;
+  closeSettingsPanel();
   accountPanel.hidden = !isOpen;
   accountToggle.setAttribute("aria-expanded", String(isOpen));
 });
+
+function closeSettingsPanel() {
+  settingsPanel.hidden = true;
+  settingsToggle.setAttribute("aria-expanded", "false");
+}
+
+function closeAccountPanel() {
+  accountPanel.hidden = true;
+  accountToggle.setAttribute("aria-expanded", "false");
+}
+
+async function savePreferences(preferences) {
+  try {
+    const response = await fetch("/api/preferences", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(preferences),
+    });
+    if (!response.ok) {
+      throw new Error("Preference save failed.");
+    }
+  } catch {
+    status.textContent = "Could not save your preference.";
+  }
+}
+
+function savePreference(name, value) {
+  savePreferences({ [name]: value });
+}
 
 parallelSlider.addEventListener("input", () => {
   parallelUploads = Number.parseInt(parallelSlider.value, 10);
@@ -88,21 +180,67 @@ parallelSlider.addEventListener("input", () => {
   localStorage.setItem(config.storageKeys.parallelUploads, String(parallelUploads));
 });
 
+parallelSlider.addEventListener("change", () => {
+  savePreference("parallelUploads", parallelUploads);
+});
+
+/*
+  The account preferences remain mirrored locally where useful so the theme
+  can be applied before an authenticated page finishes loading.
+*/
 confirmSingleDelete.addEventListener("change", () => {
   localStorage.setItem(config.storageKeys.confirmSingleDelete, String(confirmSingleDelete.checked));
+  savePreference("confirmSingleDelete", confirmSingleDelete.checked);
 });
 
 confirmBulkDelete.addEventListener("change", () => {
   localStorage.setItem(config.storageKeys.confirmBulkDelete, String(confirmBulkDelete.checked));
+  savePreference("confirmBulkDelete", confirmBulkDelete.checked);
 });
 
 themeSelect.addEventListener("change", () => {
   window.FILEDROP_THEME.setPreference(themeSelect.value);
+  savePreference("theme", themeSelect.value);
 });
 
 conflictSelect.addEventListener("change", () => {
   localStorage.setItem(config.storageKeys.conflictMode, conflictSelect.value);
+  savePreference("conflictMode", conflictSelect.value);
 });
+
+fullView.addEventListener("change", () => {
+  document.body.classList.toggle("full-view", fullView.checked);
+  savePreference("fullView", fullView.checked);
+});
+
+sortButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const selectedSort = button.dataset.sort;
+    if (sortBy === selectedSort && sortDirection === "asc") {
+      sortDirection = "desc";
+    } else if (sortBy === selectedSort) {
+      sortBy = "manual";
+      sortDirection = "asc";
+    } else {
+      sortBy = selectedSort;
+      sortDirection = "asc";
+    }
+    updateSortButtons();
+    savePreferences({ sortBy, sortDirection });
+    rerenderCurrentItems();
+  });
+});
+
+function updateSortButtons() {
+  sortButtons.forEach((button) => {
+    const isActive = button.dataset.sort === sortBy;
+    const direction = isActive ? (sortDirection === "asc" ? " ascending" : " descending") : "";
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+    button.textContent = `${button.dataset.label}${direction ? (sortDirection === "asc" ? " ↑" : " ↓") : ""}`;
+    button.setAttribute("aria-label", `${button.dataset.label}${direction}`);
+  });
+}
 
 deleteSelectedButton.addEventListener("click", () => {
   deleteSelectedItems();
@@ -203,12 +341,14 @@ function showContextMenu(item, x, y) {
     actions.push({
       label: "Download",
       action: () => {
+        showToast(`Download started for ${item.name}.`);
         window.location.assign(`/api/files/${item.path.split("/").map(encodeURIComponent).join("/")}`);
       },
     });
   }
 
   if (item) {
+    actions.push({ label: "Rename", action: (button) => { openRenamePopover(button, item); } });
     actions.push({ label: "Delete", action: () => { deleteItem(item); }, className: "delete" });
   }
 
@@ -393,9 +533,13 @@ function renderItems(data) {
     return;
   }
 
-  data.items.forEach((item, index) => {
+  const items = sortedItems(data.items);
+
+  items.forEach((item, index) => {
     const row = document.createElement("li");
     const checkbox = document.createElement("input");
+    const preview = document.createElement("div");
+    const label = document.createElement("div");
     const name = document.createElement("span");
     const actions = document.createElement("div");
 
@@ -422,6 +566,15 @@ function renderItems(data) {
 
     name.className = "item-name";
     name.textContent = item.name;
+    label.className = "item-label";
+    label.append(name);
+    const detailText = sortDetail(item);
+    if (detailText) {
+      const detail = document.createElement("span");
+      detail.className = "item-sort-detail";
+      detail.textContent = detailText;
+      label.append(detail);
+    }
 
     actions.className = "item-actions";
 
@@ -453,7 +606,6 @@ function renderItems(data) {
         preloadFolderForHover(item.path);
       });
 
-      addFolderDropTarget(row, item.path);
     } else {
       const downloadLink = document.createElement("a");
       downloadLink.className = "item-action-link";
@@ -461,6 +613,7 @@ function renderItems(data) {
       downloadLink.textContent = "Download";
       downloadLink.addEventListener("click", (event) => {
         event.stopPropagation();
+        showToast(`Download started for ${item.name}.`);
       });
       actions.append(downloadLink);
     }
@@ -483,6 +636,29 @@ function renderItems(data) {
       rowSelectionMode(item.path, index, event);
     });
 
+    preview.className = "item-preview";
+    if (item.type === "folder") {
+      preview.classList.add("folder");
+      preview.setAttribute("aria-label", "Folder");
+    } else if (item.preview === "image") {
+      const image = document.createElement("img");
+      image.loading = "lazy";
+      image.alt = "";
+      image.src = previewUrl(item.path);
+      image.addEventListener("error", () => showFilePreviewFallback(preview));
+      preview.append(image);
+    } else if (item.preview === "video") {
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.muted = true;
+      video.src = previewUrl(item.path);
+      video.addEventListener("error", () => showFilePreviewFallback(preview));
+      preview.append(video);
+    } else {
+      preview.classList.add("file");
+      preview.textContent = "·";
+    }
+
     row.addEventListener("dblclick", (event) => {
       if (event.target.closest(".item-action-button, .item-action-link, .select-file-checkbox")) {
         return;
@@ -490,6 +666,7 @@ function renderItems(data) {
       if (item.type === "folder") {
         navigateToFolder(item.path);
       } else {
+        showToast(`Download started for ${item.name}.`);
         window.location.assign(`/api/files/${item.path.split("/").map(encodeURIComponent).join("/")}`);
       }
     });
@@ -503,13 +680,217 @@ function renderItems(data) {
       showContextMenu(item, event.clientX, event.clientY);
     });
 
-    row.append(checkbox, name, actions);
+    addRowDropTarget(row, item);
+    row.append(checkbox, preview, label, actions);
     list.append(row);
   });
 
   updateSelectionControls();
-  preloadVisibleFolders(data.items);
+  preloadVisibleFolders(items);
   preloadParentFoldersAfterRender();
+}
+
+function rerenderCurrentItems() {
+  const data = itemCache.get(currentPath);
+  if (!data) {
+    return;
+  }
+  list.innerHTML = "";
+  list.className = "";
+  renderItems(data);
+}
+
+function compareNames(left, right) {
+  return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function compareOptional(left, right, compare) {
+  const leftMissing = left === null || left === undefined || left === "";
+  const rightMissing = right === null || right === undefined || right === "";
+  if (leftMissing || rightMissing) {
+    return leftMissing === rightMissing ? 0 : (leftMissing ? 1 : -1);
+  }
+  return compare(left, right) * (sortDirection === "desc" ? -1 : 1);
+}
+
+function sortedItems(items) {
+  if (sortBy === "manual") {
+    return items;
+  }
+  return [...items].sort((left, right) => {
+    if (left.type !== right.type) {
+      return left.type === "folder" ? -1 : 1;
+    }
+    let comparison = 0;
+    if (sortBy === "name") {
+      comparison = compareOptional(left.name, right.name, (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+    } else if (sortBy === "modified") {
+      comparison = compareOptional(left.modifiedAt, right.modifiedAt, (a, b) => a - b);
+    } else if (left.type === "file" && sortBy === "size") {
+      comparison = compareOptional(left.size, right.size, (a, b) => a - b);
+    } else if (left.type === "file" && sortBy === "extension") {
+      comparison = compareOptional(left.extension, right.extension, (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    }
+    if (comparison) {
+      return comparison;
+    }
+    return compareNames(left, right) * (sortDirection === "desc" ? -1 : 1);
+  });
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) {
+    return "0 bytes";
+  }
+  const units = ["bytes", "KB", "MB", "GB", "TB"];
+  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / (1024 ** unitIndex);
+  return `${value.toFixed(unitIndex ? 1 : 0)} ${units[unitIndex]}`;
+}
+
+function sortDetail(item) {
+  if (sortBy === "modified" && item.modifiedAt !== null && item.modifiedAt !== undefined) {
+    return new Date(item.modifiedAt * 1000).toLocaleString();
+  }
+  if (sortBy === "size" && item.type === "file" && item.size !== null && item.size !== undefined) {
+    return formatBytes(item.size);
+  }
+  if (sortBy === "extension" && item.type === "file" && item.extension) {
+    return `.${item.extension}`;
+  }
+  return "";
+}
+
+function previewUrl(path) {
+  return `/api/previews/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function showFilePreviewFallback(preview) {
+  preview.replaceChildren();
+  preview.classList.add("file");
+  preview.textContent = "·";
+}
+
+async function saveVisibleOrder() {
+  if (sortBy !== "manual") {
+    return;
+  }
+  const paths = visibleItemPaths();
+  const cachedItems = itemCache.get(currentPath)?.items || [];
+  const itemsByPath = new Map(cachedItems.map((item) => [item.path, item]));
+  try {
+    const response = await fetch("/api/items/order", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: currentPath, paths }),
+    });
+    if (!response.ok) {
+      const data = await response.json();
+      status.textContent = data.message || "Could not save item order.";
+      await loadItems({ force: true });
+      return;
+    }
+    invalidateFolder(currentPath);
+    itemCache.set(currentPath, { items: paths.map((path) => itemsByPath.get(path)).filter(Boolean), path: currentPath });
+    status.textContent = "Saved item order.";
+  } catch {
+    status.textContent = "Could not save item order.";
+  }
+}
+
+function rowDropMode(row, item, event) {
+  const rect = row.getBoundingClientRect();
+  const position = (event.clientY - rect.top) / rect.height;
+  if (position < config.reorderEdgeRatio) {
+    return "before";
+  }
+  if (position > 1 - config.reorderEdgeRatio) {
+    return "after";
+  }
+  return item.type === "folder" ? "folder" : "after";
+}
+
+function clearRowDropTarget(row) {
+  row.classList.remove("is-reorder-before", "is-reorder-after");
+  clearDropTarget(row);
+}
+
+function clearAllRowDropTargets() {
+  list.querySelectorAll(".is-reorder-before, .is-reorder-after").forEach((row) => {
+    row.classList.remove("is-reorder-before", "is-reorder-after");
+  });
+}
+
+function addRowDropTarget(row, item) {
+  row.addEventListener("dragover", (event) => {
+    if (!hasDraggedFiles(event) && !hasDraggedItems(event)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    clearAllRowDropTargets();
+    const mode = sortBy === "manual" ? rowDropMode(row, item, event) : (item.type === "folder" ? "folder" : "sorted");
+    if (mode === "folder") {
+      setDropTarget(row);
+    } else {
+      clearDropTarget();
+      if (hasDraggedItems(event) && mode !== "sorted") {
+        row.classList.add(mode === "before" ? "is-reorder-before" : "is-reorder-after");
+      }
+    }
+    event.dataTransfer.dropEffect = hasDraggedItems(event) ? "move" : "copy";
+  });
+  row.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget && row.contains(event.relatedTarget)) {
+      return;
+    }
+    clearRowDropTarget(row);
+  });
+  row.addEventListener("drop", (event) => {
+    const paths = draggedItemPaths(event);
+    const uploadSelection = paths.length ? null : uploadSelectionFromDrop(event);
+    if (!paths.length && !hasDraggedFiles(event)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const mode = sortBy === "manual" ? rowDropMode(row, item, event) : (item.type === "folder" ? "folder" : "sorted");
+    clearRowDropTarget(row);
+    if (mode === "folder") {
+      if (paths.length) {
+        moveItems(paths, item.path);
+      } else {
+        startDroppedUploads(uploadSelection, item.path);
+      }
+      return;
+    }
+    if (!paths.length) {
+      startDroppedUploads(uploadSelection, currentPath);
+      return;
+    }
+    if (mode === "sorted") {
+      return;
+    }
+    if (paths.includes(row.dataset.path)) {
+      return;
+    }
+    const draggedPaths = new Set(paths);
+    const draggedRows = Array.from(list.querySelectorAll("li.file-row"))
+      .filter((candidate) => draggedPaths.has(candidate.dataset.path));
+    let reference = mode === "after" ? row.nextElementSibling : row;
+    while (reference && draggedPaths.has(reference.dataset.path)) {
+      reference = reference.nextElementSibling;
+    }
+    draggedRows.forEach((draggedRow) => list.insertBefore(draggedRow, reference));
+    updateRowIndexes();
+    saveVisibleOrder();
+  });
+}
+
+function updateRowIndexes() {
+  list.querySelectorAll("li.file-row").forEach((row, index) => {
+    row.dataset.index = String(index);
+  });
 }
 
 async function loadItems(options = {}) {
@@ -584,16 +965,13 @@ function closeFolderPopover() {
   folderPopover.removeAttribute("data-selection");
 }
 
+function closeRenamePopover() {
+  renamePopover.hidden = true;
+  renameItemPath = undefined;
+}
+
 function positionFolderPopover(anchor) {
-  const rect = anchor.getBoundingClientRect();
-  const margin = 8;
-  const width = folderPopover.offsetWidth;
-  const height = folderPopover.offsetHeight;
-  const left = Math.min(rect.left, window.innerWidth - width - margin);
-  const below = rect.bottom + margin;
-  const top = below + height <= window.innerHeight ? below : Math.max(margin, rect.top - height - margin);
-  folderPopover.style.left = `${Math.max(margin, left)}px`;
-  folderPopover.style.top = `${top}px`;
+  positionPopover(folderPopover, anchor);
 }
 
 function openFolderPopover(anchor, includeSelection) {
@@ -604,6 +982,27 @@ function openFolderPopover(anchor, includeSelection) {
   positionFolderPopover(anchor);
   folderNameInput.focus();
   folderNameInput.select();
+}
+
+function openRenamePopover(anchor, item) {
+  renameItemPath = item.path;
+  renameInput.value = item.name;
+  renamePopover.hidden = false;
+  positionPopover(renamePopover, anchor);
+  renameInput.focus();
+  renameInput.select();
+}
+
+function positionPopover(popover, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  const margin = 8;
+  const width = popover.offsetWidth;
+  const height = popover.offsetHeight;
+  const left = Math.min(rect.left, window.innerWidth - width - margin);
+  const below = rect.bottom + margin;
+  const top = below + height <= window.innerHeight ? below : Math.max(margin, rect.top - height - margin);
+  popover.style.left = `${Math.max(margin, left)}px`;
+  popover.style.top = `${top}px`;
 }
 
 function availableFolderName() {
@@ -646,8 +1045,9 @@ async function createFolder(folderName) {
 
     invalidateFolder(currentPath);
     status.textContent = `Created ${data.name}.`;
+    showToast(`Created folder ${data.name}.`);
     closeFolderPopover();
-    navigateToFolder(data.path);
+    await loadItems({ force: true });
   } catch {
     status.textContent = "Could not create folder.";
   }
@@ -680,9 +1080,10 @@ async function createFolderFromSelection(folderName) {
     invalidateFolder(currentPath);
     selectedItems = new Set();
     status.textContent = `Created ${data.folder.name} with ${data.moved} item${data.moved === 1 ? "" : "s"}.`;
+    showToast(`Created folder ${data.folder.name} with ${data.moved} item${data.moved === 1 ? "" : "s"}.`);
     closeFolderPopover();
     invalidateFolder(data.folder.path);
-    navigateToFolder(data.folder.path);
+    await loadItems({ force: true });
   } catch {
     status.textContent = "Could not create folder.";
   }
@@ -698,6 +1099,35 @@ folderPopover.addEventListener("submit", (event) => {
 });
 
 folderPopoverCancel.addEventListener("click", closeFolderPopover);
+
+renamePopover.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = renameInput.value.trim();
+  if (!name) {
+    status.textContent = "Names must include at least one visible character.";
+    return;
+  }
+  try {
+    const response = await fetch("/api/items", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: renameItemPath, name }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      status.textContent = data.message || "Could not rename item.";
+      return;
+    }
+    closeRenamePopover();
+    invalidateFolder(currentPath);
+    status.textContent = `Renamed item to ${data.name}.`;
+    await loadItems({ force: true });
+  } catch {
+    status.textContent = "Could not rename item.";
+  }
+});
+
+renamePopoverCancel.addEventListener("click", closeRenamePopover);
 
 async function deleteItemRequest(path) {
   const response = await fetch(`/api/items?path=${encodeURIComponent(path)}`, {
@@ -779,13 +1209,103 @@ async function deleteSelectedItems() {
   await loadItems({ force: true });
 }
 
-function uploadFile(file, targetPath, onProgress) {
+function joinUploadPath(...parts) {
+  return parts
+    .flatMap((part) => (part || "").replaceAll("\\", "/").split("/"))
+    .filter(Boolean)
+    .join("/");
+}
+
+function uploadSelectionFromFiles(files) {
+  const directories = new Set();
+  const entries = Array.from(files).map((file) => {
+    const parts = (file.webkitRelativePath || file.name).replaceAll("\\", "/").split("/").filter(Boolean);
+    const parentPath = parts.slice(0, -1).join("/");
+    for (let index = 1; index < parts.length; index += 1) {
+      directories.add(parts.slice(0, index).join("/"));
+    }
+    return { file, parentPath, displayName: parts.join("/") };
+  });
+  return { directories: Array.from(directories), entries };
+}
+
+function readEntryFile(entry) {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+function readDirectoryEntries(reader) {
+  return new Promise((resolve, reject) => {
+    const entries = [];
+    function readBatch() {
+      reader.readEntries((batch) => {
+        if (!batch.length) {
+          resolve(entries);
+          return;
+        }
+        entries.push(...batch);
+        readBatch();
+      }, reject);
+    }
+    readBatch();
+  });
+}
+
+async function walkDroppedEntry(entry, parentPath, selection) {
+  const relativePath = joinUploadPath(parentPath, entry.name);
+  if (entry.isFile) {
+    selection.entries.push({ file: await readEntryFile(entry), parentPath, displayName: relativePath });
+    return;
+  }
+  if (!entry.isDirectory) {
+    return;
+  }
+  selection.directories.push(relativePath);
+  const children = await readDirectoryEntries(entry.createReader());
+  await Promise.all(children.map((child) => walkDroppedEntry(child, relativePath, selection)));
+}
+
+async function uploadSelectionFromDrop(event) {
+  const items = Array.from(event.dataTransfer?.items || []);
+  const entries = items.map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length) {
+    return uploadSelectionFromFiles(filesFromDrop(event));
+  }
+  const selection = { directories: [], entries: [] };
+  await Promise.all(entries.map((entry) => walkDroppedEntry(entry, "", selection)));
+  return selection;
+}
+
+async function createUploadDirectories(directories, targetPath) {
+  if (!directories.length) {
+    return;
+  }
+  const response = await fetch("/api/folders/tree", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: targetPath, directories }),
+  });
+  if (!response.ok) {
+    const data = await response.json();
+    throw new Error(data.message || "Could not create uploaded folders.");
+  }
+}
+
+async function startDroppedUploads(selection, targetPath) {
+  try {
+    await startUploads(await selection, targetPath);
+  } catch {
+    status.textContent = "Could not read the dropped folder.";
+  }
+}
+
+function uploadFile(entry, targetPath, onProgress) {
   return new Promise((resolve) => {
+    const { file } = entry;
     const request = new XMLHttpRequest();
     const body = new FormData();
 
     body.append("file", file);
-    body.append("path", targetPath);
+    body.append("path", joinUploadPath(targetPath, entry.parentPath));
     body.append("replace", String(conflictSelect.value === "replace"));
 
     request.upload.addEventListener("progress", (event) => {
@@ -856,10 +1376,11 @@ function updateFailedControls() {
   uploadPanelActions.classList.toggle("is-visible", hasFailedUploads);
 }
 
-async function uploadQueue(files, targetPath, runId) {
-  const totalBytes = files.reduce((total, file) => total + file.size, 0);
-  const loadedBytes = new Array(files.length).fill(0);
-  const rows = files.map((file, index) => {
+async function uploadQueue(entries, targetPath, runId) {
+  const totalBytes = entries.reduce((total, entry) => total + entry.file.size, 0);
+  const loadedBytes = new Array(entries.length).fill(0);
+  const rows = entries.map((entry, index) => {
+    const { file } = entry;
     const row = document.createElement("div");
     const name = document.createElement("div");
     const state = document.createElement("div");
@@ -868,7 +1389,7 @@ async function uploadQueue(files, targetPath, runId) {
     row.className = "upload-item";
     name.className = "upload-name";
     state.className = "upload-state";
-    name.textContent = file.name;
+    name.textContent = entry.displayName;
     state.textContent = "Queued";
     progress.value = 0;
       progress.max = config.progressMaximum;
@@ -876,7 +1397,7 @@ async function uploadQueue(files, targetPath, runId) {
     row.append(name, state, progress);
     uploadList.append(row);
 
-    return { file, index, row, state, progress };
+    return { entry, file, index, row, state, progress };
   });
 
   let completed = 0;
@@ -890,7 +1411,7 @@ async function uploadQueue(files, targetPath, runId) {
 
     overallProgress.value = percent;
     overallPercent.textContent = `${percent}%`;
-    overallLabel.textContent = `Uploading ${completed} of ${files.length} files`;
+    overallLabel.textContent = `Uploading ${completed} of ${entries.length} files`;
   }
 
   async function worker() {
@@ -900,7 +1421,7 @@ async function uploadQueue(files, targetPath, runId) {
 
       row.state.textContent = "Uploading";
 
-      const result = await uploadFile(row.file, targetPath, (loaded) => {
+      const result = await uploadFile(row.entry, targetPath, (loaded) => {
         loadedBytes[row.index] = loaded;
         row.progress.value = row.file.size ? Math.round((loaded / row.file.size) * 100) : 100;
         updateOverall();
@@ -952,19 +1473,22 @@ async function uploadQueue(files, targetPath, runId) {
   return { succeeded, failed };
 }
 
-async function startUploads(files, targetPath = currentPath) {
-
-  if (!files.length) {
+async function startUploads(selection, targetPath = currentPath) {
+  const normalizedSelection = Array.isArray(selection) ? uploadSelectionFromFiles(selection) : selection;
+  const { directories, entries } = normalizedSelection;
+  if (!directories.length && !entries.length) {
     return;
   }
 
-  chooseFilesButton.classList.add("is-disabled");
-  chooseFilesButton.setAttribute("aria-disabled", "true");
+  chooseUploadButton.classList.add("is-disabled");
+  chooseUploadButton.setAttribute("aria-disabled", "true");
+  chooseUploadButton.disabled = true;
   input.disabled = true;
+  folderInput.disabled = true;
   window.clearTimeout(uploadPanelHideTimer);
   const runId = uploadRunId + 1;
   uploadRunId = runId;
-  status.textContent = `Starting ${files.length} upload${files.length === 1 ? "" : "s"}...`;
+  status.textContent = `Starting ${entries.length} upload${entries.length === 1 ? "" : "s"}...`;
   uploadList.innerHTML = "";
   updateFailedControls();
   uploadPanel.classList.add("is-visible");
@@ -972,7 +1496,16 @@ async function startUploads(files, targetPath = currentPath) {
   overallPercent.textContent = "0%";
 
   try {
-    const result = await uploadQueue(files, targetPath, runId);
+    await createUploadDirectories(directories, targetPath);
+    if (!entries.length) {
+      status.textContent = `Uploaded ${directories.length} empty folder${directories.length === 1 ? "" : "s"}.`;
+      showToast(status.textContent);
+      hideUploadPanel();
+      invalidateFolder(targetPath);
+      await loadItems({ force: true });
+      return;
+    }
+    const result = await uploadQueue(entries, targetPath, runId);
 
     if (result.failed) {
       status.textContent = `Uploaded ${result.succeeded} file${result.succeeded === 1 ? "" : "s"}; ${result.failed} failed.`;
@@ -988,11 +1521,17 @@ async function startUploads(files, targetPath = currentPath) {
     await loadItems({ force: true });
   } catch {
     status.textContent = "Upload failed.";
+    if (!uploadList.querySelector(".upload-item")) {
+      hideUploadPanel();
+    }
   } finally {
     input.disabled = false;
+    folderInput.disabled = false;
     input.value = "";
-    chooseFilesButton.classList.remove("is-disabled");
-    chooseFilesButton.removeAttribute("aria-disabled");
+    folderInput.value = "";
+    chooseUploadButton.classList.remove("is-disabled");
+    chooseUploadButton.removeAttribute("aria-disabled");
+    chooseUploadButton.disabled = false;
   }
 }
 
@@ -1036,6 +1575,7 @@ async function moveItems(paths, targetPath) {
       return;
     }
     status.textContent = `Moved ${data.moved} item${data.moved === 1 ? "" : "s"}.`;
+    showToast(`Moved ${data.moved} item${data.moved === 1 ? "" : "s"}.`);
     invalidateFolder(currentPath);
     invalidateFolder(targetPath);
     await loadItems({ force: true });
@@ -1090,8 +1630,8 @@ function addFolderDropTarget(element, targetPath) {
   element.addEventListener("drop", (event) => {
     const resolvedTargetPath = typeof targetPath === "function" ? targetPath() : targetPath;
     const paths = draggedItemPaths(event);
-    const files = filesFromDrop(event);
-    if (!paths.length && !files.length) {
+    const uploadSelection = paths.length ? null : uploadSelectionFromDrop(event);
+    if (!paths.length && !hasDraggedFiles(event)) {
       return;
     }
     event.preventDefault();
@@ -1100,7 +1640,7 @@ function addFolderDropTarget(element, targetPath) {
     if (paths.length) {
       moveItems(paths, resolvedTargetPath);
     } else {
-      startUploads(files, resolvedTargetPath);
+      startDroppedUploads(uploadSelection, resolvedTargetPath);
     }
   });
 }
@@ -1111,6 +1651,10 @@ form.addEventListener("submit", (event) => {
 
 input.addEventListener("change", () => {
   startUploads(Array.from(input.files));
+});
+
+folderInput.addEventListener("change", () => {
+  startUploads(uploadSelectionFromFiles(folderInput.files));
 });
 
 addFolderDropTarget(list, () => currentPath);
@@ -1148,13 +1692,14 @@ function stopAutoScroll() {
     autoScrollFrame = undefined;
   }
   clearDropTarget();
+  clearAllRowDropTargets();
 }
 
 document.addEventListener("dragover", updateAutoScroll);
 document.addEventListener("drop", stopAutoScroll);
 document.addEventListener("dragend", stopAutoScroll);
 document.addEventListener("contextmenu", (event) => {
-  if (event.target.closest("button, a, input, select, textarea, label, form, .settings-panel, .account-panel, .upload-panel, .context-menu, .folder-popover, li.file-row")) {
+  if (event.target.closest("button, a, input, select, textarea, label, form, .settings-panel, .account-panel, .upload-panel, .context-menu, .folder-popover, .rename-popover, li.file-row")) {
     return;
   }
   event.preventDefault();
@@ -1174,11 +1719,23 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 });
 
 document.addEventListener("click", (event) => {
+  if (!uploadChoiceMenu.hidden && !form.contains(event.target)) {
+    closeUploadChoiceMenu();
+  }
+  if (!settingsPanel.hidden && !settingsPanel.contains(event.target) && !settingsToggle.contains(event.target)) {
+    closeSettingsPanel();
+  }
+  if (!accountPanel.hidden && !accountPanel.contains(event.target) && !accountToggle.contains(event.target)) {
+    closeAccountPanel();
+  }
   if (!contextMenu.hidden && !contextMenu.contains(event.target)) {
     hideContextMenu();
   }
   if (!folderPopover.hidden && !folderPopover.contains(event.target) && !contextMenu.contains(event.target)) {
     closeFolderPopover();
+  }
+  if (!renamePopover.hidden && !renamePopover.contains(event.target) && !contextMenu.contains(event.target)) {
+    closeRenamePopover();
   }
 });
 
@@ -1193,8 +1750,10 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
+    closeUploadChoiceMenu();
     hideContextMenu();
     closeFolderPopover();
+    closeRenamePopover();
   }
 });
 

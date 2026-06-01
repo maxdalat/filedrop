@@ -6,6 +6,7 @@ window.FILEDROP_CONFIG = Object.freeze({
   contextMenuFallbackWidth: 180,
   contextMenuMargin: 8,
   draggedItemsType: "application/x-filedrop-items",
+  reorderEdgeRatio: 0.24,
   defaultParallelUploads: 3,
   maxParallelUploads: 99,
   minParallelUploads: 1,
@@ -19,5 +20,6 @@ window.FILEDROP_CONFIG = Object.freeze({
     parallelUploads: "parallelUploads",
     theme: "theme",
   }),
+  toastVisibleMs: 2400,
   uploadedRowVisibleMs: 2000,
 });

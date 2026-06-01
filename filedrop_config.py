@@ -11,6 +11,9 @@ CSRF_TOKEN_BYTES = 32
 TEMPORARY_PASSWORD_BYTES = 12
 RSA_PUBLIC_EXPONENT = 65537
 RSA_KEY_SIZE = 3072
+DEFAULT_PARALLEL_UPLOADS = 3
+MIN_PARALLEL_UPLOADS = 1
+MAX_PARALLEL_UPLOADS = 99
 
 DATABASE_FILENAME = "filedrop.db"
 PRIVATE_KEY_FILENAME = "session_private.pem"
@@ -45,6 +48,8 @@ FORM_CONSTRAINTS = {
     "username_max_length": USERNAME_MAX_LENGTH,
     "email_max_length": EMAIL_MAX_LENGTH,
 }
+IMAGE_PREVIEW_EXTENSIONS = {"avif", "gif", "jpeg", "jpg", "png", "svg", "webp"}
+VIDEO_PREVIEW_EXTENSIONS = {"mov", "mp4", "mpeg", "mpg", "webm"}
 
 
 def env_value(name, default=None):

@@ -19,11 +19,15 @@ from filedrop_config import (
     BLOCKED_FILENAME_CHARS,
     CSRF_TOKEN_BYTES,
     DATABASE_FILENAME,
+    DEFAULT_PARALLEL_UPLOADS,
     DEFAULT_UPLOAD_DIRECTORY,
     EMAIL_MAX_LENGTH,
     FORM_CONSTRAINTS,
     INSTANCE_PATH_ENV,
+    IMAGE_PREVIEW_EXTENSIONS,
     MAX_UPLOAD_SIZE_BYTES,
+    MAX_PARALLEL_UPLOADS,
+    MIN_PARALLEL_UPLOADS,
     PASSWORD_HASH_METHOD,
     PASSWORD_MIN_LENGTH,
     PRIVATE_KEY_FILENAME,
@@ -39,6 +43,7 @@ from filedrop_config import (
     USERNAME_CHARACTERS,
     USERNAME_MAX_LENGTH,
     USERNAME_MIN_LENGTH,
+    VIDEO_PREVIEW_EXTENSIONS,
     env_flag,
     env_value,
 )
@@ -94,7 +99,7 @@ def inject_form_constraints():
 def init_db():
     db = get_db()
     db.executescript(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -114,11 +119,36 @@ def init_db():
             expires_at TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS item_orders (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            folder_path TEXT NOT NULL,
+            item_path TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            PRIMARY KEY (user_id, folder_path, item_path)
+        );
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            theme TEXT NOT NULL DEFAULT 'system' CHECK (theme IN ('system', 'light', 'dark')),
+            conflict_mode TEXT NOT NULL DEFAULT 'add' CHECK (conflict_mode IN ('add', 'replace')),
+            parallel_uploads INTEGER NOT NULL DEFAULT {DEFAULT_PARALLEL_UPLOADS}
+                CHECK (parallel_uploads BETWEEN {MIN_PARALLEL_UPLOADS} AND {MAX_PARALLEL_UPLOADS}),
+            confirm_single_delete INTEGER NOT NULL DEFAULT 1,
+            confirm_bulk_delete INTEGER NOT NULL DEFAULT 1,
+            full_view INTEGER NOT NULL DEFAULT 0,
+            sort_by TEXT NOT NULL DEFAULT 'manual'
+                CHECK (sort_by IN ('manual', 'name', 'modified', 'size', 'extension')),
+            sort_direction TEXT NOT NULL DEFAULT 'asc' CHECK (sort_direction IN ('asc', 'desc'))
+        );
         """
     )
     user_columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
     if "is_initial_admin" not in user_columns:
         db.execute("ALTER TABLE users ADD COLUMN is_initial_admin INTEGER NOT NULL DEFAULT 0")
+    preference_columns = {row["name"] for row in db.execute("PRAGMA table_info(user_preferences)")}
+    if "sort_by" not in preference_columns:
+        db.execute("ALTER TABLE user_preferences ADD COLUMN sort_by TEXT NOT NULL DEFAULT 'manual'")
+    if "sort_direction" not in preference_columns:
+        db.execute("ALTER TABLE user_preferences ADD COLUMN sort_direction TEXT NOT NULL DEFAULT 'asc'")
     if not db.execute("SELECT 1 FROM users WHERE is_initial_admin = 1").fetchone():
         first_admin = db.execute("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").fetchone()
         if first_admin:
@@ -298,10 +328,19 @@ def validate_name(name, label="Names"):
         abort(400, description=f"{label} cannot include path separators.")
 
 
+def validate_relative_path(relative_path, label="Paths"):
+    if not isinstance(relative_path, str):
+        abort(400, description=f"{label} must be text.")
+    parts = [part for part in relative_path.split("/") if part]
+    for part in parts:
+        validate_name(part, "Path segments")
+    return parts
+
+
 def parse_upload_file(upload):
     if not upload or not upload.filename:
         abort(400, description="No file was selected.")
-    filename = upload.filename
+    filename = upload.filename.replace("\\", "/").rsplit("/", 1)[-1]
     validate_name(filename, "Filenames")
     filename_for_extension = filename.rstrip()
     if "." not in filename_for_extension:
@@ -322,9 +361,7 @@ def accessible_root():
 
 def resolve_upload_path(relative_path=""):
     root = accessible_root()
-    parts = [part for part in (relative_path or "").split("/") if part]
-    for part in parts:
-        validate_name(part, "Path segments")
+    parts = validate_relative_path(relative_path or "")
     path = (root / Path(*parts)).resolve() if parts else root
     if path != root and root not in path.parents:
         abort(400, description="Path is outside your upload folder.")
@@ -335,9 +372,37 @@ def item_payload(path):
     root = accessible_root()
     relative_path = path.relative_to(root).as_posix()
     payload = {"name": path.name, "path": "" if relative_path == "." else relative_path, "type": "folder" if path.is_dir() else "file"}
+    try:
+        metadata = path.stat()
+        payload["modifiedAt"] = metadata.st_mtime
+        if path.is_file():
+            payload["size"] = metadata.st_size
+    except OSError:
+        payload["modifiedAt"] = None
+        if path.is_file():
+            payload["size"] = None
     if path.is_file():
-        payload["size"] = path.stat().st_size
+        extension = path.suffix.lstrip(".").lower()
+        payload["extension"] = extension or None
+        if extension in IMAGE_PREVIEW_EXTENSIONS:
+            payload["preview"] = "image"
+        elif extension in VIDEO_PREVIEW_EXTENSIONS:
+            payload["preview"] = "video"
     return payload
+
+
+def ordered_items(folder):
+    root = accessible_root()
+    folder_path = "" if folder == root else folder.relative_to(root).as_posix()
+    positions = {
+        row["item_path"]: row["position"]
+        for row in get_db().execute(
+            "SELECT item_path, position FROM item_orders WHERE user_id = ? AND folder_path = ?",
+            (g.user["user_id"], folder_path),
+        )
+    }
+    items = [item_payload(path) for path in folder.iterdir()]
+    return sorted(items, key=lambda item: (positions.get(item["path"], len(positions)), item["name"].casefold()))
 
 
 def available_filename(folder, filename):
@@ -400,7 +465,30 @@ def render_browser(relative_path=""):
         abort(404, description="Folder was not found.")
     root = accessible_root()
     current_path = "" if folder == root else folder.relative_to(root).as_posix()
-    return render_template("index.html", current_path=current_path, csrf_token=g.session["csrf_token"], user=g.user)
+    return render_template(
+        "index.html",
+        current_path=current_path,
+        csrf_token=g.session["csrf_token"],
+        preferences=user_preferences(),
+        user=g.user,
+    )
+
+
+def user_preferences():
+    db = get_db()
+    db.execute("INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)", (g.user["user_id"],))
+    db.commit()
+    row = db.execute("SELECT * FROM user_preferences WHERE user_id = ?", (g.user["user_id"],)).fetchone()
+    return {
+        "theme": row["theme"],
+        "conflictMode": row["conflict_mode"],
+        "parallelUploads": row["parallel_uploads"],
+        "confirmSingleDelete": bool(row["confirm_single_delete"]),
+        "confirmBulkDelete": bool(row["confirm_bulk_delete"]),
+        "fullView": bool(row["full_view"]),
+        "sortBy": row["sort_by"],
+        "sortDirection": row["sort_direction"],
+    }
 
 
 @app.errorhandler(HTTPException)
@@ -616,6 +704,53 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.patch("/api/preferences")
+@login_required
+def update_preferences():
+    data = request.get_json(silent=True) or {}
+    if set(data) - {"theme", "conflictMode", "parallelUploads", "confirmSingleDelete", "confirmBulkDelete", "fullView", "sortBy", "sortDirection"}:
+        abort(400, description="Unknown preference.")
+    preferences = user_preferences()
+    preferences.update(data)
+    if preferences["theme"] not in {"system", "light", "dark"}:
+        abort(400, description="Choose a valid appearance.")
+    if preferences["conflictMode"] not in {"add", "replace"}:
+        abort(400, description="Choose a valid file conflict option.")
+    if (
+        not isinstance(preferences["parallelUploads"], int)
+        or isinstance(preferences["parallelUploads"], bool)
+        or not MIN_PARALLEL_UPLOADS <= preferences["parallelUploads"] <= MAX_PARALLEL_UPLOADS
+    ):
+        abort(400, description=f"Uploads at once must be between {MIN_PARALLEL_UPLOADS} and {MAX_PARALLEL_UPLOADS}.")
+    for name in {"confirmSingleDelete", "confirmBulkDelete", "fullView"}:
+        if not isinstance(preferences[name], bool):
+            abort(400, description=f"{name} must be true or false.")
+    if preferences["sortBy"] not in {"manual", "name", "modified", "size", "extension"}:
+        abort(400, description="Choose a valid file sort option.")
+    if preferences["sortDirection"] not in {"asc", "desc"}:
+        abort(400, description="Choose a valid sort direction.")
+    get_db().execute(
+        """UPDATE user_preferences
+           SET theme = ?, conflict_mode = ?, parallel_uploads = ?,
+               confirm_single_delete = ?, confirm_bulk_delete = ?, full_view = ?,
+               sort_by = ?, sort_direction = ?
+           WHERE user_id = ?""",
+        (
+            preferences["theme"],
+            preferences["conflictMode"],
+            preferences["parallelUploads"],
+            preferences["confirmSingleDelete"],
+            preferences["confirmBulkDelete"],
+            preferences["fullView"],
+            preferences["sortBy"],
+            preferences["sortDirection"],
+            g.user["user_id"],
+        ),
+    )
+    get_db().commit()
+    return jsonify(preferences)
+
+
 @app.get("/api/items")
 @login_required
 def items():
@@ -624,7 +759,7 @@ def items():
     if not folder.exists() or not folder.is_dir():
         abort(404, description="Folder was not found.")
     parent_path = folder.parent.relative_to(root).as_posix() if folder != root else ""
-    return jsonify({"items": sorted((item_payload(path) for path in folder.iterdir()), key=lambda item: (item["type"] != "folder", item["name"].casefold())), "parent": "" if parent_path == "." else parent_path, "path": "" if folder == root else folder.relative_to(root).as_posix()})
+    return jsonify({"items": ordered_items(folder), "parent": "" if parent_path == "." else parent_path, "path": "" if folder == root else folder.relative_to(root).as_posix()})
 
 
 @app.post("/api/folders")
@@ -640,6 +775,41 @@ def create_folder():
         abort(409, description="A file or folder with that name already exists.")
     new_folder.mkdir()
     return jsonify(item_payload(new_folder)), 201
+
+
+@app.post("/api/folders/tree")
+@login_required
+def create_folder_tree():
+    data = request.get_json(silent=True) or {}
+    root = resolve_upload_path(data.get("path", ""))
+    directories = data.get("directories", [])
+    if not root.exists() or not root.is_dir():
+        abort(404, description="Folder was not found.")
+    if not isinstance(directories, list):
+        abort(400, description="Directories must be a list of paths.")
+    if not all(isinstance(path, str) for path in directories):
+        abort(400, description="Directory paths must be text.")
+
+    tree = []
+    for relative_path in sorted(set(directories), key=lambda path: (path.count("/"), path)):
+        parts = validate_relative_path(relative_path, "Directory paths")
+        if not parts:
+            continue
+        directory = resolve_upload_path("/".join([data.get("path", "").strip("/"), *parts]))
+        for ancestor in [directory, *directory.parents]:
+            if ancestor.exists() and not ancestor.is_dir():
+                abort(409, description=f"A file already exists in the path for {relative_path}.")
+            if ancestor == root:
+                break
+        tree.append(directory)
+
+    created = 0
+    for directory in tree:
+        if directory.exists():
+            continue
+        directory.mkdir(parents=True)
+        created += 1
+    return jsonify({"created": created}), 201
 
 
 @app.post("/api/folders/from-selection")
@@ -694,6 +864,31 @@ def move_items():
     return jsonify({"moved": execute_item_moves(moves, replace_existing=replace_existing)})
 
 
+@app.put("/api/items/order")
+@login_required
+def reorder_items():
+    data = request.get_json(silent=True) or {}
+    folder = resolve_upload_path(data.get("path", ""))
+    item_paths = data.get("paths", [])
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+    if not isinstance(item_paths, list) or not all(isinstance(path, str) for path in item_paths):
+        abort(400, description="Item paths must be a list of text paths.")
+    actual_paths = {item_payload(path)["path"] for path in folder.iterdir()}
+    if len(item_paths) != len(set(item_paths)) or set(item_paths) != actual_paths:
+        abort(400, description="The item order must include every item in the folder exactly once.")
+    root = accessible_root()
+    folder_path = "" if folder == root else folder.relative_to(root).as_posix()
+    db = get_db()
+    db.execute("DELETE FROM item_orders WHERE user_id = ? AND folder_path = ?", (g.user["user_id"], folder_path))
+    db.executemany(
+        "INSERT INTO item_orders (user_id, folder_path, item_path, position) VALUES (?, ?, ?, ?)",
+        ((g.user["user_id"], folder_path, item_path, position) for position, item_path in enumerate(item_paths)),
+    )
+    db.commit()
+    return jsonify({"ordered": len(item_paths)})
+
+
 @app.delete("/api/items")
 @login_required
 def delete_item():
@@ -727,6 +922,16 @@ def download_file(filename):
     if not file_path.exists() or not file_path.is_file():
         abort(404, description="File was not found.")
     return send_from_directory(file_path.parent, file_path.name, as_attachment=True)
+
+
+@app.get("/api/previews/<path:filename>")
+@login_required
+def preview_file(filename):
+    file_path = resolve_upload_path(filename)
+    extension = file_path.suffix.lstrip(".").lower()
+    if not file_path.exists() or not file_path.is_file() or extension not in IMAGE_PREVIEW_EXTENSIONS | VIDEO_PREVIEW_EXTENSIONS:
+        abort(404, description="Preview was not found.")
+    return send_from_directory(file_path.parent, file_path.name)
 
 
 with app.app_context():
