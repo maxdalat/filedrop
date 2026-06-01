@@ -1,0 +1,17 @@
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #1f2933; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #f7f7f4; }
+main { width: min(94vw, 1040px); margin: 0 auto; padding: 44px 0; }
+header, .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+a { color: #14532d; font-weight: 650; }
+table { width: 100%; margin-top: 20px; border-collapse: collapse; background: #fff; }
+th, td { padding: 12px; border-bottom: 1px solid #d1d5db; text-align: left; vertical-align: middle; }
+th { background: #eef2ee; }
+.avatar { display: inline-grid; width: 30px; height: 30px; margin-right: 8px; place-items: center; border-radius: 50%; color: #fff; font-weight: 750; }
+form { display: inline; }
+button { margin: 2px; border: 0; border-radius: 7px; padding: 8px 10px; background: #166534; color: #fff; cursor: pointer; }
+.deny { background: #991b1b; }
+.reset { background: #374151; }
+.promote { background: #6d28d9; }
+.notice { padding: 14px; border: 1px solid #86efac; border-radius: 8px; background: #dcfce7; }
+code { font-size: 1rem; font-weight: 750; }

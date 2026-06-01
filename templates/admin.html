@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Manage accounts | Filedrop</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div><h1>Account management</h1><p>Approve requests, promote administrators, and issue one-time temporary passwords.</p></div>
+        <a href="{{ url_for('index') }}">Back to files</a>
+      </header>
+      {% if temporary_password %}
+        <p class="notice">Temporary password for <strong>{{ reset_username }}</strong>: <code>{{ temporary_password }}</code><br>Share it securely. It is only displayed once.</p>
+      {% endif %}
+      <table>
+        <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+          {% for item in users %}
+            <tr>
+              <td><span class="avatar" style="background: {{ item.avatar_color }}">{{ item.username[0]|upper }}</span>{{ item.username }}</td>
+              <td>{{ item.email }}</td>
+              <td>{{ item.role }}</td>
+              <td>{{ item.status }}</td>
+              <td class="actions">
+                {% if item.status != "approved" %}
+                  <form method="post" action="{{ url_for('approve_user', user_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Approve</button></form>
+                {% endif %}
+                {% if item.role != "admin" and item.status != "denied" %}
+                  <form method="post" action="{{ url_for('deny_user', user_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="deny">Deny</button></form>
+                {% endif %}
+                {% if item.status == "approved" %}
+                  <form method="post" action="{{ url_for('reset_user_password', user_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="reset">Reset password</button></form>
+                {% endif %}
+                {% if item.status == "approved" and item.role != "admin" %}
+                  <form method="post" action="{{ url_for('promote_user', user_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="promote">Make admin</button></form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>

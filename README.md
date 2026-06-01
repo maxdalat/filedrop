@@ -1,21 +1,46 @@
 # filedrop
 
-Minimal Flask webpage plus API server, packaged with Docker. Files upload into the local `uploads/` folder inside the running app/container.
+Secured Flask file browser with account requests, administrator approval, per-user home folders, and administrator access to the shared upload root.
+
+Passwords are stored as salted `scrypt` hashes. Sessions are server-side records handed to the browser as opaque, HttpOnly cookies signed with a runtime-generated RSA keypair. Runtime state belongs in `instance/`, and uploaded files belong in `uploads/`.
 
 ## Run with Docker
 
+Persist both runtime directories:
+
 ```sh
 docker build -t filedrop .
-docker run --rm -p 8000:8000 filedrop
+docker run --rm -p 8000:8000 \
+  -v filedrop-instance:/app/instance \
+  -v filedrop-uploads:/app/uploads \
+  filedrop
 ```
 
-Open <http://localhost:8000>.
+Open <http://localhost:8000>. On a fresh installation, the first visitor is redirected to a one-time setup page to choose the initial administrator username, email address, and password.
 
-API checks:
+When deploying behind HTTPS, set `FILEDROP_SECURE_COOKIES=true`. This adds the browser's `Secure` flag to session cookies. Do not expose the app publicly over plain HTTP.
+
+## Run Locally
+
+Start the app without administrator environment variables:
+
+```powershell
+py -3 app.py
+```
+
+Open <http://localhost:8000>. If `instance/filedrop.db` has no users, the app opens the one-time administrator setup page. Existing installations keep their current accounts.
+
+## Account Flow
+
+New users request an account with a username, email address, and password. The app stores the email address but does not send or verify email. An administrator approves or denies each request.
+
+An administrator can issue a temporary password or promote an approved user to administrator from the account-management page. Temporary passwords are displayed once, existing sessions are revoked, and the user must choose a new password after signing in.
+
+## Optional Paths
+
+For a non-Docker deployment, runtime directories can be moved with:
 
 ```sh
-curl http://localhost:8000/api/health
-curl http://localhost:8000/api/files
-curl -F "file=@example.txt" http://localhost:8000/api/files
-curl -O http://localhost:8000/api/files/example.txt
+FILEDROP_INSTANCE_PATH=/secure/path/filedrop-instance
+FILEDROP_UPLOAD_PATH=/data/filedrop-uploads
 ```
