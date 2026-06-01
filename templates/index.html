@@ -72,7 +72,12 @@
 
     <main>
       <div class="upload-panel" id="upload-panel">
+        <div class="upload-panel-header">
+          <span class="upload-elapsed" id="upload-elapsed">Elapsed 00:00</span>
+          <button class="toggle-upload-panel-button" type="button" id="toggle-upload-panel-button" aria-expanded="true">Hide</button>
+        </div>
         <div class="upload-panel-actions" id="upload-panel-actions">
+          <button class="stop-uploads-button" type="button" id="stop-uploads-button">Stop uploads</button>
           <button class="clear-failed-button" type="button" id="clear-failed-button">Clear all failed uploads</button>
         </div>
         <div class="progress-wrap" id="overall-progress-wrap">

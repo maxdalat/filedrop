@@ -18,6 +18,8 @@ docker run --rm -p 8000:8000 \
 
 Open <http://localhost:8000>. On a fresh installation, the first visitor is redirected to a one-time setup page to choose the initial administrator username, email address, and password.
 
+The Docker image runs Gunicorn with threaded request handling so uploads do not block folder browsing, downloads, or page reloads.
+
 When deploying behind HTTPS, set `FILEDROP_SECURE_COOKIES=true`. This adds the browser's `Secure` flag to session cookies. Do not expose the app publicly over plain HTTP.
 
 ## Run Locally

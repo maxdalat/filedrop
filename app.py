@@ -9,7 +9,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, abort, g, jsonify, make_response, redirect, render_template, request, send_from_directory, url_for
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -138,6 +138,16 @@ def init_db():
                 CHECK (sort_by IN ('manual', 'name', 'modified', 'size', 'extension')),
             sort_direction TEXT NOT NULL DEFAULT 'asc' CHECK (sort_direction IN ('asc', 'desc'))
         );
+        CREATE TABLE IF NOT EXISTS upload_receipts (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            upload_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, upload_id)
+        );
+        CREATE TABLE IF NOT EXISTS app_migrations (
+            name TEXT PRIMARY KEY
+        );
         """
     )
     user_columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
@@ -148,11 +158,19 @@ def init_db():
         db.execute("ALTER TABLE user_preferences ADD COLUMN sort_by TEXT NOT NULL DEFAULT 'manual'")
     if "sort_direction" not in preference_columns:
         db.execute("ALTER TABLE user_preferences ADD COLUMN sort_direction TEXT NOT NULL DEFAULT 'asc'")
+    parallel_upload_migration = "interactive_parallel_uploads_4"
+    if not db.execute("SELECT 1 FROM app_migrations WHERE name = ?", (parallel_upload_migration,)).fetchone():
+        db.execute(
+            "UPDATE user_preferences SET parallel_uploads = ? WHERE parallel_uploads = 3 OR parallel_uploads > ?",
+            (DEFAULT_PARALLEL_UPLOADS, MAX_PARALLEL_UPLOADS),
+        )
+        db.execute("INSERT INTO app_migrations (name) VALUES (?)", (parallel_upload_migration,))
     if not db.execute("SELECT 1 FROM users WHERE is_initial_admin = 1").fetchone():
         first_admin = db.execute("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").fetchone()
         if first_admin:
             db.execute("UPDATE users SET is_initial_admin = 1 WHERE id = ?", (first_admin["id"],))
     db.execute("DELETE FROM sessions WHERE expires_at <= ?", (iso_time(utc_now()),))
+    db.execute("DELETE FROM upload_receipts WHERE created_at <= ?", (iso_time(utc_now() - timedelta(hours=24)),))
     db.commit()
 
 
@@ -458,13 +476,17 @@ def render_browser(relative_path=""):
         abort(404, description="Folder was not found.")
     root = accessible_root()
     current_path = "" if folder == root else folder.relative_to(root).as_posix()
-    return render_template(
-        "index.html",
-        current_path=current_path,
-        csrf_token=g.session["csrf_token"],
-        preferences=user_preferences(),
-        user=g.user,
+    response = make_response(
+        render_template(
+            "index.html",
+            current_path=current_path,
+            csrf_token=g.session["csrf_token"],
+            preferences=user_preferences(),
+            user=g.user,
+        )
     )
+    response.headers["Cache-Control"] = "private, max-age=30" if request.headers.get("X-Filedrop-Prefetch") == "1" else "private, no-cache"
+    return response
 
 
 def user_preferences():
@@ -895,6 +917,17 @@ def delete_item():
 @app.post("/api/files")
 @login_required
 def upload_file():
+    upload_id = request.headers.get("X-Upload-ID", "").strip()
+    if upload_id and (len(upload_id) > 100 or not upload_id.replace("-", "").isalnum()):
+        abort(400, description="Upload ID is invalid.")
+    if upload_id:
+        db = get_db()
+        receipt = db.execute(
+            "SELECT path FROM upload_receipts WHERE user_id = ? AND upload_id = ?",
+            (g.user["user_id"], upload_id),
+        ).fetchone()
+        if receipt:
+            return jsonify({"filename": Path(receipt["path"]).name, "path": receipt["path"]}), 200
     filename = parse_upload_file(request.files.get("file"))
     folder = resolve_upload_path(request.form.get("path", ""))
     if not folder.exists() or not folder.is_dir():
@@ -905,7 +938,14 @@ def upload_file():
     if replace_existing and destination.exists() and destination.is_dir():
         abort(409, description="A folder with that name already exists.")
     request.files["file"].save(folder / saved_filename)
-    return jsonify({"filename": saved_filename, "path": (folder / saved_filename).relative_to(accessible_root()).as_posix()}), 201
+    saved_path = (folder / saved_filename).relative_to(accessible_root()).as_posix()
+    if upload_id:
+        db.execute(
+            "INSERT INTO upload_receipts (user_id, upload_id, path, created_at) VALUES (?, ?, ?, ?)",
+            (g.user["user_id"], upload_id, saved_path, iso_time(utc_now())),
+        )
+        db.commit()
+    return jsonify({"filename": saved_filename, "path": saved_path}), 201
 
 
 @app.get("/api/files/<path:filename>")
@@ -932,4 +972,4 @@ with app.app_context():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    app.run(host="0.0.0.0", port=8000, debug=True, threaded=True)

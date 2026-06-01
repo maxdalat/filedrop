@@ -19,8 +19,11 @@ const folderInput = document.querySelector("#folder-input");
 const chooseFolderButton = document.querySelector("#choose-folder-button");
 const status = document.querySelector("#status");
 const uploadPanel = document.querySelector("#upload-panel");
+const uploadElapsed = document.querySelector("#upload-elapsed");
+const toggleUploadPanelButton = document.querySelector("#toggle-upload-panel-button");
 const uploadPanelActions = document.querySelector("#upload-panel-actions");
 const toastContainer = document.querySelector("#toast-container");
+const stopUploadsButton = document.querySelector("#stop-uploads-button");
 const clearFailedButton = document.querySelector("#clear-failed-button");
 const uploadList = document.querySelector("#upload-list");
 const list = document.querySelector("#file-list");
@@ -65,6 +68,8 @@ let parallelUploads = Number.isInteger(savedParallelUploads)
   ? Math.min(config.maxParallelUploads, Math.max(config.minParallelUploads, savedParallelUploads))
   : config.defaultParallelUploads;
 let uploadPanelHideTimer;
+let uploadStopwatchTimer;
+let uploadStartedAt;
 let uploadRunId = 0;
 let selectedItems = new Set();
 let lastSelectedPath = null;
@@ -75,6 +80,9 @@ let sortBy = ["manual", "name", "modified", "size", "extension"].includes(accoun
 let sortDirection = accountPreferences.sortDirection === "desc" ? "desc" : "asc";
 const itemCache = new Map();
 const pendingItemLoads = new Map();
+const prefetchedFolderPages = new Set();
+const pendingUploadItems = new Map();
+let activeUploadRun;
 
 function closeUploadChoiceMenu() {
   uploadChoiceMenu.hidden = true;
@@ -264,6 +272,16 @@ clearFailedButton.addEventListener("click", () => {
   });
 });
 
+stopUploadsButton.addEventListener("click", () => {
+  if (activeUploadRun) {
+    stopUploadRun(activeUploadRun);
+  }
+});
+
+toggleUploadPanelButton.addEventListener("click", () => {
+  setUploadPanelCollapsed(!uploadPanel.classList.contains("is-collapsed"));
+});
+
 function updateBreadcrumbs() {
   breadcrumbs.innerHTML = "";
   const segments = currentPath ? currentPath.split("/") : [];
@@ -295,6 +313,9 @@ function updateBreadcrumbs() {
     link.className = "breadcrumb-link";
     link.textContent = crumb.label;
     link.addEventListener("click", () => navigateToFolder(crumb.path));
+    link.addEventListener("mouseenter", () => preloadFolderForNavigation(crumb.path));
+    link.addEventListener("focus", () => preloadFolderForNavigation(crumb.path));
+    link.addEventListener("pointerdown", () => preloadFolderForNavigation(crumb.path));
     addFolderDropTarget(link, crumb.path);
     breadcrumbs.append(link);
   });
@@ -472,6 +493,26 @@ function preloadFolder(path) {
   fetchItems(path).catch(() => {});
 }
 
+function prefetchFolderPage(path) {
+  const url = folderUrl(path);
+  if (prefetchedFolderPages.has(url)) {
+    return;
+  }
+  prefetchedFolderPages.add(url);
+  fetch(url, {
+    cache: "force-cache",
+    credentials: "same-origin",
+    headers: { "X-Filedrop-Prefetch": "1" },
+  }).catch(() => {
+    prefetchedFolderPages.delete(url);
+  });
+}
+
+function preloadFolderForNavigation(path) {
+  prefetchFolderPage(path);
+  preloadFolder(path);
+}
+
 function parentFolderPaths(path) {
   const segments = path ? path.split("/") : [];
   const parents = [""];
@@ -504,7 +545,7 @@ function preloadSelectedFolders() {
 }
 
 function preloadVisibleFolders(items) {
-  const folders = items.filter((item) => item.type === "folder");
+  const folders = items.filter((item) => item.type === "folder" && !item.pendingUpload);
   if (folders.length < config.preloadAllFolderLimit) {
     folders.forEach((item) => preloadFolder(item.path));
   } else {
@@ -513,6 +554,7 @@ function preloadVisibleFolders(items) {
 }
 
 function preloadFolderForHover(path) {
+  prefetchFolderPage(path);
   const selectedFolders = folderPathsFromSelection();
   if (selectedFolders.length) {
     selectedFolders.forEach(preloadFolder);
@@ -525,8 +567,39 @@ function invalidateFolder(path) {
   itemCache.delete(path || "");
 }
 
+function uploadParentPath(path) {
+  const segments = path ? path.split("/") : [];
+  return segments.slice(0, -1).join("/");
+}
+
+function pendingChildren(path) {
+  return Array.from(pendingUploadItems.values()).filter((item) => uploadParentPath(item.path) === path);
+}
+
+function mergedFolderItems(data) {
+  const items = new Map(data.items.map((item) => [item.path, item]));
+  const pending = pendingChildren(data.path || "");
+  pending
+    .sort((left, right) => {
+      if (left.type !== right.type) {
+        return left.type === "folder" ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
+    })
+    .forEach((item) => items.set(item.path, item));
+  return { ...data, items: Array.from(items.values()) };
+}
+
+function renderCurrentFolder() {
+  const data = itemCache.get(currentPath) || { items: [], path: currentPath, parent: uploadParentPath(currentPath) };
+  list.innerHTML = "";
+  list.className = "";
+  renderItems(data);
+}
+
 function renderItems(data) {
   status.textContent = "";
+  data = mergedFolderItems(data);
 
   if (!data.items.length) {
     showEmptyFileList();
@@ -547,7 +620,8 @@ function renderItems(data) {
     row.dataset.path = item.path;
     row.dataset.index = String(index);
     row.dataset.type = item.type;
-    row.draggable = true;
+    row.classList.toggle("is-pending-upload", Boolean(item.pendingUpload));
+    row.draggable = !item.pendingUpload;
     row.addEventListener("dragstart", (event) => {
       if (!selectedItems.has(item.path)) {
         setSelectedItems(new Set([item.path]), item.path);
@@ -558,6 +632,7 @@ function renderItems(data) {
 
     checkbox.type = "checkbox";
     checkbox.className = "select-file-checkbox";
+    checkbox.disabled = Boolean(item.pendingUpload);
     checkbox.setAttribute("aria-label", `Select ${item.name}`);
     checkbox.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -568,7 +643,7 @@ function renderItems(data) {
     name.textContent = item.name;
     label.className = "item-label";
     label.append(name);
-    const detailText = sortDetail(item);
+    const detailText = item.pendingUpload ? "Pending upload" : sortDetail(item);
     if (detailText) {
       const detail = document.createElement("span");
       detail.className = "item-sort-detail";
@@ -588,25 +663,33 @@ function renderItems(data) {
         navigateToFolder(item.path);
       });
       openButton.addEventListener("mouseenter", () => {
-        preloadFolder(item.path);
+        if (!item.pendingUpload) {
+          preloadFolderForNavigation(item.path);
+        }
       });
       openButton.addEventListener("focus", () => {
-        preloadFolder(item.path);
+        if (!item.pendingUpload) {
+          preloadFolderForNavigation(item.path);
+        }
       });
       openButton.addEventListener("pointerdown", () => {
-        preloadFolder(item.path);
+        if (!item.pendingUpload) {
+          preloadFolderForNavigation(item.path);
+        }
       });
       actions.append(openButton);
 
-      row.addEventListener("mouseenter", () => {
-        preloadFolderForHover(item.path);
-      });
+      if (!item.pendingUpload) {
+        row.addEventListener("mouseenter", () => {
+          preloadFolderForHover(item.path);
+        });
 
-      row.addEventListener("focusin", () => {
-        preloadFolderForHover(item.path);
-      });
+        row.addEventListener("focusin", () => {
+          preloadFolderForHover(item.path);
+        });
+      }
 
-    } else {
+    } else if (!item.pendingUpload) {
       const downloadLink = document.createElement("a");
       downloadLink.className = "item-action-link";
       downloadLink.href = `/api/files/${item.path.split("/").map(encodeURIComponent).join("/")}`;
@@ -618,19 +701,26 @@ function renderItems(data) {
       actions.append(downloadLink);
     }
 
-    const deleteButton = document.createElement("button");
-    deleteButton.type = "button";
-    deleteButton.className = "item-action-button delete";
-    deleteButton.textContent = "×";
-    deleteButton.setAttribute("aria-label", `Delete ${item.name}`);
-    deleteButton.addEventListener("click", (event) => {
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "item-action-button delete";
+    removeButton.textContent = "×";
+    removeButton.setAttribute("aria-label", `${item.pendingUpload ? "Cancel upload" : "Delete"} ${item.name}`);
+    removeButton.addEventListener("click", (event) => {
       event.stopPropagation();
-      deleteItem(item);
+      if (item.pendingUpload) {
+        cancelPendingUploadPath(item.path);
+      } else {
+        deleteItem(item);
+      }
     });
-    actions.append(deleteButton);
+    actions.append(removeButton);
 
     row.addEventListener("click", (event) => {
       if (event.target.closest(".item-action-button, .item-action-link")) {
+        return;
+      }
+      if (item.pendingUpload) {
         return;
       }
       rowSelectionMode(item.path, index, event);
@@ -672,6 +762,9 @@ function renderItems(data) {
     });
 
     row.addEventListener("contextmenu", (event) => {
+      if (item.pendingUpload) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       if (!selectedItems.has(item.path)) {
@@ -680,7 +773,9 @@ function renderItems(data) {
       showContextMenu(item, event.clientX, event.clientY);
     });
 
-    addRowDropTarget(row, item);
+    if (!item.pendingUpload) {
+      addRowDropTarget(row, item);
+    }
     row.append(checkbox, preview, label, actions);
     list.append(row);
   });
@@ -715,7 +810,12 @@ function compareOptional(left, right, compare) {
 
 function sortedItems(items) {
   if (sortBy === "manual") {
-    return items;
+    return [...items].sort((left, right) => {
+      if (left.type === right.type) {
+        return 0;
+      }
+      return left.type === "folder" ? -1 : 1;
+    });
   }
   return [...items].sort((left, right) => {
     if (left.type !== right.type) {
@@ -916,8 +1016,12 @@ async function loadItems(options = {}) {
 
     renderItems(data);
   } catch (error) {
-    status.textContent = error.message || "Could not load items.";
-    showEmptyFileList();
+    if (pendingChildren(requestedPath).length) {
+      renderItems({ items: [], path: requestedPath, parent: uploadParentPath(requestedPath) });
+    } else {
+      status.textContent = error.message || "Could not load items.";
+      showEmptyFileList();
+    }
   }
 }
 
@@ -942,7 +1046,7 @@ function syncItemSelectionView() {
 }
 
 function visibleItemPaths() {
-  return Array.from(list.querySelectorAll("li.file-row")).map((row) => row.dataset.path);
+  return Array.from(list.querySelectorAll("li.file-row:not(.is-pending-upload)")).map((row) => row.dataset.path);
 }
 
 function updateSelectionControls() {
@@ -1216,6 +1320,105 @@ function joinUploadPath(...parts) {
     .join("/");
 }
 
+function addPendingUploadTree(selection, targetPath, run) {
+  const addFolder = (relativePath) => {
+    const path = joinUploadPath(targetPath, relativePath);
+    if (!path) {
+      return;
+    }
+    pendingUploadItems.set(path, {
+      name: path.split("/").at(-1),
+      path,
+      type: "folder",
+      pendingUpload: true,
+      uploadRunId: run.id,
+    });
+  };
+
+  selection.directories.forEach(addFolder);
+  selection.entries.forEach((entry) => {
+    const path = joinUploadPath(targetPath, entry.parentPath, entry.file.name);
+    entry.fullPath = path;
+    entry.uploadId = createUploadId();
+    entry.canceled = false;
+    entry.request = null;
+    pendingUploadItems.set(path, {
+      name: entry.file.name,
+      path,
+      type: "file",
+      size: entry.file.size,
+      pendingUpload: true,
+      uploadRunId: run.id,
+      entry,
+    });
+  });
+  renderCurrentFolder();
+}
+
+function removePendingUploadPath(path) {
+  pendingUploadItems.delete(path);
+  renderCurrentFolder();
+}
+
+function cleanupPendingFolders(run) {
+  let removedFolder;
+  do {
+    removedFolder = false;
+    const pendingPaths = Array.from(pendingUploadItems.keys());
+    Array.from(pendingUploadItems.values()).forEach((item) => {
+      if (item.uploadRunId !== run.id || item.type !== "folder") {
+        return;
+      }
+      if (!pendingPaths.some((path) => path !== item.path && path.startsWith(`${item.path}/`))) {
+        pendingUploadItems.delete(item.path);
+        removedFolder = true;
+      }
+    });
+  } while (removedFolder);
+}
+
+function cancelPendingUploadPath(path) {
+  const canceledPaths = Array.from(pendingUploadItems.keys()).filter((candidate) => candidate === path || candidate.startsWith(`${path}/`));
+  canceledPaths.forEach((candidate) => {
+    const item = pendingUploadItems.get(candidate);
+    if (item?.entry) {
+      item.entry.canceled = true;
+      item.entry.request?.abort();
+      item.entry.stackRow?.remove();
+    }
+    pendingUploadItems.delete(candidate);
+  });
+  if (currentPath === path || currentPath.startsWith(`${path}/`)) {
+    currentPath = uploadParentPath(path);
+    window.history.pushState({ path: currentPath }, "", folderUrl(currentPath));
+    loadItems();
+  } else {
+    renderCurrentFolder();
+  }
+}
+
+function stopUploadRun(run) {
+  run.stopped = true;
+  run.entries.forEach((entry) => {
+    entry.canceled = true;
+    entry.request?.abort();
+    entry.stackRow?.remove();
+  });
+  const removedPaths = Array.from(pendingUploadItems.values())
+    .filter((item) => item.uploadRunId === run.id)
+    .map((item) => item.path);
+  removedPaths.forEach((path) => pendingUploadItems.delete(path));
+  while (removedPaths.includes(currentPath)) {
+    currentPath = uploadParentPath(currentPath);
+  }
+  if (activeUploadRun === run) {
+    activeUploadRun = null;
+  }
+  updateFailedControls();
+  window.history.pushState({ path: currentPath }, "", folderUrl(currentPath));
+  loadItems();
+}
+
 function uploadSelectionFromFiles(files) {
   const directories = new Set();
   const entries = Array.from(files).map((file) => {
@@ -1290,6 +1493,22 @@ async function createUploadDirectories(directories, targetPath) {
   }
 }
 
+function ensureUploadDirectory(entry, targetPath, run) {
+  if (!entry.parentPath) {
+    return Promise.resolve();
+  }
+  if (!run.directoryRequests.has(entry.parentPath)) {
+    run.directoryRequests.set(entry.parentPath, createUploadDirectories([entry.parentPath], targetPath));
+  }
+  return run.directoryRequests.get(entry.parentPath);
+}
+
+function emptyUploadDirectories(selection) {
+  return selection.directories.filter((directory) => {
+    return !selection.entries.some((entry) => entry.parentPath === directory || entry.parentPath.startsWith(`${directory}/`));
+  });
+}
+
 async function startDroppedUploads(selection, targetPath) {
   try {
     await startUploads(await selection, targetPath);
@@ -1298,7 +1517,26 @@ async function startDroppedUploads(selection, targetPath) {
   }
 }
 
-function uploadFile(entry, targetPath, onProgress) {
+function parseRetryAfter(value) {
+  if (!value) {
+    return null;
+  }
+  const seconds = Number.parseInt(value, 10);
+  if (Number.isInteger(seconds)) {
+    return Math.max(0, seconds * 1000);
+  }
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? null : Math.max(0, date - Date.now());
+}
+
+function createUploadId() {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
+}
+
+function uploadFile(entry, targetPath, run, onProgress) {
   return new Promise((resolve) => {
     const { file } = entry;
     const request = new XMLHttpRequest();
@@ -1307,6 +1545,18 @@ function uploadFile(entry, targetPath, onProgress) {
     body.append("file", file);
     body.append("path", joinUploadPath(targetPath, entry.parentPath));
     body.append("replace", String(conflictSelect.value === "replace"));
+
+    const finish = (result) => {
+      if (entry.request !== request) {
+        return;
+      }
+      entry.request = null;
+      run.requests.delete(request);
+      resolve(result);
+    };
+
+    entry.request = request;
+    run.requests.add(request);
 
     request.upload.addEventListener("progress", (event) => {
       if (event.lengthComputable) {
@@ -1325,25 +1575,65 @@ function uploadFile(entry, targetPath, onProgress) {
 
       if (request.status >= 200 && request.status < 300) {
         onProgress(file.size);
-        resolve({ ok: true, filename: data.filename || file.name });
+        finish({ ok: true, filename: data.filename || file.name });
         return;
       }
 
-      resolve({ ok: false, message: data.message || "Upload failed." });
+      finish({
+        ok: false,
+        message: data.message || "Upload failed.",
+        retryAfterMs: parseRetryAfter(request.getResponseHeader("Retry-After")),
+        retryable: [408, 425, 429, 500, 502, 503, 504].includes(request.status),
+      });
     });
 
     request.addEventListener("error", () => {
-      resolve({ ok: false, message: "Network error." });
+      finish({ ok: false, message: "Network error.", retryable: true });
     });
 
     request.addEventListener("abort", () => {
-      resolve({ ok: false, message: "Upload canceled." });
+      finish({ ok: false, message: "Upload canceled.", retryable: false, canceled: true });
     });
 
     request.open("POST", "/api/files");
     request.setRequestHeader("X-CSRF-Token", csrfToken);
+    request.setRequestHeader("X-Upload-ID", entry.uploadId);
     request.send(body);
   });
+}
+
+function formatElapsed(milliseconds) {
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const base = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return hours ? `${String(hours).padStart(2, "0")}:${base}` : base;
+}
+
+function updateUploadElapsed() {
+  uploadElapsed.textContent = `Elapsed ${formatElapsed(Date.now() - uploadStartedAt)}`;
+}
+
+function startUploadStopwatch() {
+  window.clearInterval(uploadStopwatchTimer);
+  uploadStartedAt = Date.now();
+  updateUploadElapsed();
+  uploadStopwatchTimer = window.setInterval(updateUploadElapsed, 1000);
+}
+
+function stopUploadStopwatch() {
+  window.clearInterval(uploadStopwatchTimer);
+  uploadStopwatchTimer = null;
+  if (uploadStartedAt) {
+    updateUploadElapsed();
+  }
+}
+
+function setUploadPanelCollapsed(collapsed) {
+  uploadPanel.classList.toggle("is-collapsed", collapsed);
+  toggleUploadPanelButton.textContent = collapsed ? "Show" : "Hide";
+  toggleUploadPanelButton.setAttribute("aria-expanded", String(!collapsed));
 }
 
 function hideUploadPanel() {
@@ -1373,10 +1663,13 @@ function removeWithSwipe(element, afterRemove) {
 
 function updateFailedControls() {
   const hasFailedUploads = Boolean(uploadList.querySelector(".upload-item.is-failed"));
-  uploadPanelActions.classList.toggle("is-visible", hasFailedUploads);
+  const hasActiveRun = Boolean(activeUploadRun);
+  stopUploadsButton.hidden = !hasActiveRun;
+  clearFailedButton.hidden = !hasFailedUploads;
+  uploadPanelActions.classList.toggle("is-visible", hasFailedUploads || hasActiveRun);
 }
 
-async function uploadQueue(entries, targetPath, runId) {
+async function uploadQueue(entries, targetPath, run) {
   const totalBytes = entries.reduce((total, entry) => total + entry.file.size, 0);
   const loadedBytes = new Array(entries.length).fill(0);
   const rows = entries.map((entry, index) => {
@@ -1396,6 +1689,7 @@ async function uploadQueue(entries, targetPath, runId) {
 
     row.append(name, state, progress);
     uploadList.append(row);
+    entry.stackRow = row;
 
     return { entry, file, index, row, state, progress };
   });
@@ -1418,26 +1712,68 @@ async function uploadQueue(entries, targetPath, runId) {
     while (nextIndex < rows.length) {
       const row = rows[nextIndex];
       nextIndex += 1;
-
-      row.state.textContent = "Uploading";
-
-      const result = await uploadFile(row.entry, targetPath, (loaded) => {
-        loadedBytes[row.index] = loaded;
-        row.progress.value = row.file.size ? Math.round((loaded / row.file.size) * 100) : 100;
+      if (row.entry.canceled || run.stopped) {
+        completed += 1;
+        loadedBytes[row.index] = row.file.size;
+        removePendingUploadPath(row.entry.fullPath);
+        row.row.remove();
         updateOverall();
-      });
+        continue;
+      }
+
+      let result;
+      let retries = 0;
+      while (true) {
+        await ensureUploadDirectory(row.entry, targetPath, run);
+        if (row.entry.canceled || run.stopped) {
+          result = { ok: false, canceled: true };
+          break;
+        }
+        row.state.textContent = "Uploading 0%";
+        result = await uploadFile(row.entry, targetPath, run, (loaded) => {
+          loadedBytes[row.index] = loaded;
+          const percent = row.file.size ? Math.round((loaded / row.file.size) * 100) : 100;
+          row.progress.value = percent;
+          row.state.textContent = `Uploading ${percent}%`;
+          updateOverall();
+        });
+        if (result.ok || result.canceled || !result.retryable || retries >= config.maxUploadRetries) {
+          break;
+        }
+        retries += 1;
+        loadedBytes[row.index] = 0;
+        row.progress.value = 0;
+        updateOverall();
+        const retryDelay = Math.min(
+          result.retryAfterMs ?? config.retryBaseDelayMs * (2 ** (retries - 1)),
+          config.maxRetryDelayMs,
+        );
+        row.state.textContent = `Retrying in ${formatElapsed(retryDelay)} (${retries}/${config.maxUploadRetries})`;
+        await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
+      }
 
       completed += 1;
 
       if (result.ok) {
         succeeded += 1;
+        removePendingUploadPath(row.entry.fullPath);
+        cleanupPendingFolders(run);
+        invalidateFolder(uploadParentPath(row.entry.fullPath));
+        if (currentPath === uploadParentPath(row.entry.fullPath)) {
+          loadItems({ force: true });
+        }
         row.state.textContent = "Uploaded";
         row.progress.value = 100;
         window.setTimeout(() => {
           removeWithSwipe(row.row, () => {
-            hideUploadPanelIfEmpty(runId);
+            hideUploadPanelIfEmpty(run.id);
           });
           }, config.uploadedRowVisibleMs);
+      } else if (result.canceled) {
+        loadedBytes[row.index] = row.file.size;
+        removePendingUploadPath(row.entry.fullPath);
+        cleanupPendingFolders(run);
+        row.row.remove();
       } else {
         failed += 1;
         loadedBytes[row.index] = row.file.size;
@@ -1452,7 +1788,7 @@ async function uploadQueue(entries, targetPath, runId) {
         dismiss.addEventListener("click", () => {
           removeWithSwipe(row.row, () => {
             updateFailedControls();
-            hideUploadPanelIfEmpty(runId);
+            hideUploadPanelIfEmpty(run.id);
           });
         });
         row.row.insertBefore(dismiss, row.progress);
@@ -1486,18 +1822,31 @@ async function startUploads(selection, targetPath = currentPath) {
   input.disabled = true;
   folderInput.disabled = true;
   window.clearTimeout(uploadPanelHideTimer);
+  startUploadStopwatch();
   const runId = uploadRunId + 1;
   uploadRunId = runId;
+  const run = {
+    id: runId,
+    directoryRequests: new Map(),
+    entries,
+    requests: new Set(),
+    stopped: false,
+  };
+  activeUploadRun = run;
+  addPendingUploadTree(normalizedSelection, targetPath, run);
   status.textContent = `Starting ${entries.length} upload${entries.length === 1 ? "" : "s"}...`;
   uploadList.innerHTML = "";
   updateFailedControls();
   uploadPanel.classList.add("is-visible");
+  setUploadPanelCollapsed(false);
   overallProgress.value = 0;
   overallPercent.textContent = "0%";
 
   try {
-    await createUploadDirectories(directories, targetPath);
+    await createUploadDirectories(emptyUploadDirectories(normalizedSelection), targetPath);
     if (!entries.length) {
+      cleanupPendingFolders(run);
+      renderCurrentFolder();
       status.textContent = `Uploaded ${directories.length} empty folder${directories.length === 1 ? "" : "s"}.`;
       showToast(status.textContent);
       hideUploadPanel();
@@ -1505,9 +1854,11 @@ async function startUploads(selection, targetPath = currentPath) {
       await loadItems({ force: true });
       return;
     }
-    const result = await uploadQueue(entries, targetPath, runId);
+    const result = await uploadQueue(entries, targetPath, run);
 
-    if (result.failed) {
+    if (run.stopped) {
+      status.textContent = "Uploads stopped.";
+    } else if (result.failed) {
       status.textContent = `Uploaded ${result.succeeded} file${result.succeeded === 1 ? "" : "s"}; ${result.failed} failed.`;
     } else {
       status.textContent = `Uploaded ${result.succeeded} file${result.succeeded === 1 ? "" : "s"}.`;
@@ -1525,6 +1876,13 @@ async function startUploads(selection, targetPath = currentPath) {
       hideUploadPanel();
     }
   } finally {
+    if (activeUploadRun === run) {
+      activeUploadRun = null;
+    }
+    cleanupPendingFolders(run);
+    updateFailedControls();
+    renderCurrentFolder();
+    stopUploadStopwatch();
     input.disabled = false;
     folderInput.disabled = false;
     input.value = "";

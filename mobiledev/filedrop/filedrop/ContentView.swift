@@ -50,7 +50,7 @@ final class FileDropViewModel: ObservableObject {
     @Published var isSelecting: Bool = false
 
     // Settings
-    @AppStorage("uploadsAtOnce") var uploadsAtOnce: Int = 3
+    @AppStorage("uploadsAtOnce") var uploadsAtOnce: Int = 4
     @AppStorage("confirmSingleDelete") var confirmSingleDelete: Bool = true
     @AppStorage("confirmBulkDelete") var confirmBulkDelete: Bool = true
 
@@ -529,7 +529,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Uploads") {
-                    Stepper(value: $model.uploadsAtOnce, in: 1...99) {
+                    Stepper(value: $model.uploadsAtOnce, in: 1...4) {
                         HStack { Text("Uploads at once"); Spacer(); Text("\(model.uploadsAtOnce)") }
                     }
                 }

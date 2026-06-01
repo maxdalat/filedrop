@@ -354,6 +354,39 @@ progress::-moz-progress-bar {
   border-top: 1px solid #d1d5db;
 }
 
+.upload-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.upload-elapsed {
+  color: #5b6472;
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.toggle-upload-panel-button {
+  border: 0;
+  background: transparent;
+  color: #166534;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.upload-panel.is-collapsed .upload-panel-header {
+  margin-bottom: 0;
+}
+
+.upload-panel.is-collapsed .upload-panel-actions,
+.upload-panel.is-collapsed .progress-wrap,
+.upload-panel.is-collapsed .upload-list {
+  display: none;
+}
+
 .upload-panel-actions {
   display: none;
   justify-content: flex-end;
@@ -365,15 +398,23 @@ progress::-moz-progress-bar {
 }
 
 .clear-failed-button,
+.stop-uploads-button,
 .dismiss-upload-button {
   border: 1px solid rgb(209 213 219 / 70%);
   background: rgb(255 255 255 / 72%);
   color: #1f2933;
 }
 
-.clear-failed-button {
+.clear-failed-button,
+.stop-uploads-button {
   padding: 8px 10px;
   font-size: 0.9rem;
+}
+
+.stop-uploads-button {
+  margin-right: auto;
+  border-color: #fecaca;
+  color: #991b1b;
 }
 
 .upload-list:empty {
@@ -674,6 +715,16 @@ li.file-row:hover {
 
 li.file-row.is-selected {
   background: #e8f5ee;
+}
+
+li.file-row.is-pending-upload {
+  background: #f8fafc;
+  color: #64748b;
+  opacity: 0.62;
+}
+
+li.file-row.is-pending-upload:hover {
+  background: #f1f5f9;
 }
 
 .item-preview {
@@ -1044,10 +1095,25 @@ html[data-theme="dark"] .rename-popover-cancel {
   color: #cbd5e1;
 }
 
-html[data-theme="dark"] .clear-failed-button {
+html[data-theme="dark"] .clear-failed-button,
+html[data-theme="dark"] .stop-uploads-button {
     border-color: #4b5563;
     background: rgb(17 24 39 / 72%);
     color: #f9fafb;
+}
+
+html[data-theme="dark"] li.file-row.is-pending-upload,
+html[data-theme="dark"] li.file-row.is-pending-upload:hover {
+    background: #182231;
+    color: #94a3b8;
+}
+
+html[data-theme="dark"] .upload-elapsed {
+    color: #cbd5e1;
+}
+
+html[data-theme="dark"] .toggle-upload-panel-button {
+    color: #86efac;
 }
 
 html[data-theme="dark"] .dismiss-upload-button {
