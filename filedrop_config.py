@@ -30,16 +30,6 @@ USERNAME_MAX_LENGTH = 40
 EMAIL_MAX_LENGTH = 254
 USERNAME_CHARACTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 
-ALLOWED_EXTENSIONS = {
-    "3ds", "3mf", "7z", "aac", "ai", "amf", "ape", "avif", "avi", "blend", "bmp", "bz2",
-    "cbddlp", "ctb", "csv", "dae", "doc", "docx", "eml", "epub", "fbx", "flac", "gif",
-    "glb", "gltf", "gcode", "gz", "heic", "heif", "ics", "iges", "igs", "jpeg", "jpg",
-    "json", "key", "log", "m4a", "md", "mov", "mp3", "mp4", "mpeg", "mpg", "numbers",
-    "obj", "ods", "odt", "ogg", "pages", "pdf", "photon", "photons", "ply", "png", "ppt",
-    "pptx", "psd", "pwmx", "pwmo", "pws", "rar", "rtf", "scad", "slc", "step", "stl",
-    "stp", "svg", "tar", "tif", "tiff", "tsv", "txt", "wav", "webm", "webp", "wma",
-    "wmv", "wrl", "x3d", "xls", "xlsx", "xml", "yaml", "yml", "zip",
-}
 BLOCKED_FILENAME_CHARS = {"/", "\\", "\x00"}
 AVATAR_COLORS = ("#6d5dfc", "#d05a7a", "#168aad", "#9b5de5", "#cc7722", "#2a9d8f", "#52796f", "#b56576")
 FORM_CONSTRAINTS = {

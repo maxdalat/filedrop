@@ -14,7 +14,6 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from filedrop_config import (
-    ALLOWED_EXTENSIONS,
     AVATAR_COLORS,
     BLOCKED_FILENAME_CHARS,
     CSRF_TOKEN_BYTES,
@@ -342,12 +341,6 @@ def parse_upload_file(upload):
         abort(400, description="No file was selected.")
     filename = upload.filename.replace("\\", "/").rsplit("/", 1)[-1]
     validate_name(filename, "Filenames")
-    filename_for_extension = filename.rstrip()
-    if "." not in filename_for_extension:
-        abort(400, description="Files must include an extension.")
-    extension = filename_for_extension.rsplit(".", 1)[1].lower()
-    if extension not in ALLOWED_EXTENSIONS:
-        abort(400, description=f".{extension} files are not allowed.")
     return filename
 
 

@@ -12,13 +12,6 @@ import Combine
 private enum APIConfig {
     static let baseURL = URL(string: "https://filedrop.max-dalat.com/api")!
     static let maxUploadBytes: Int64 = 8 * 1024 * 1024 * 1024 // 8 GiB
-    static let allowedExtensions: Set<String> = [
-        "7z","aac","ai","ape","avif","avi","bmp","bz2","csv","doc","docx","eml","epub",
-        "flac","gif","gz","heic","heif","ics","jpeg","jpg","json","key","log","m4a","md",
-        "mov","mp3","mp4","mpeg","mpg","numbers","ods","odt","ogg","pages","pdf","png",
-        "ppt","pptx","psd","rar","rtf","svg","tar","tif","tiff","tsv","txt","wav","webm",
-        "webp","wma","wmv","xls","xlsx","xml","yaml","yml","zip"
-    ]
 }
 
 struct ItemListing: Codable {
@@ -206,12 +199,7 @@ final class FileDropViewModel: ObservableObject {
                 if let size = values.fileSize, Int64(size) > APIConfig.maxUploadBytes { throw UploadError.tooLarge }
             } catch { self.show(error: error); self.uploadTasks[index].state = .failed(error.localizedDescription); return }
 
-            // Validate extension and invalid path separators
-            let ext = fileURL.pathExtension.lowercased()
-            if !ext.isEmpty && !APIConfig.allowedExtensions.contains(ext) {
-                self.uploadTasks[index].state = .failed("Unsupported file type .\(ext)")
-                return
-            }
+            // Validate invalid path separators
             if name.contains("/") || name.contains("\\") { self.uploadTasks[index].state = .failed("Name contains path separators"); return }
 
             // Begin security access
@@ -480,7 +468,7 @@ struct ContentView: View {
     }
 
     private var allowedUTTypes: [UTType] {
-        // Allow any, but picker filters by known types; server validates extensions
+        // Allow any file type supported by the picker.
         return [.item]
     }
 
@@ -558,4 +546,3 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 }
 #Preview { ContentView() }
-
