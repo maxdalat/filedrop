@@ -12,4 +12,7 @@ COPY . .
 
 EXPOSE 8000
 
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
+  CMD python -c "import json, urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2); payload = json.load(response); raise SystemExit(0 if response.status == 200 and payload.get('status') == 'ok' else 1)"
+
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--worker-class", "gthread", "--threads", "16", "--timeout", "0", "app:app"]

@@ -20,6 +20,8 @@ Open <http://localhost:8000>. On a fresh installation, the first visitor is redi
 
 The Docker image runs Gunicorn with threaded request handling so uploads do not block folder browsing, downloads, or page reloads.
 
+The image includes a Docker health check for Coolify. It probes `/api/health` every 10 seconds and reports live container health after verifying SQLite access and the writable upload directory. Coolify will surface the health state automatically when health checks are enabled for the application.
+
 When deploying behind HTTPS, set `FILEDROP_SECURE_COOKIES=true`. This adds the browser's `Secure` flag to session cookies. Do not expose the app publicly over plain HTTP.
 
 ## Run Locally

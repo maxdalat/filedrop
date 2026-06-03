@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import os
 import secrets
 import shutil
 import sqlite3
@@ -716,7 +717,10 @@ def browse(relative_path):
 
 @app.get("/api/health")
 def health():
-    return jsonify({"status": "ok"})
+    get_db().execute("SELECT 1").fetchone()
+    if not UPLOAD_ROOT.exists() or not UPLOAD_ROOT.is_dir() or not os.access(UPLOAD_ROOT, os.W_OK):
+        return jsonify({"status": "error", "message": "Upload directory is unavailable."}), 503
+    return jsonify({"status": "ok", "checkedAt": iso_time(utc_now())})
 
 
 @app.patch("/api/preferences")
