@@ -9,11 +9,49 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
     <link rel="prefetch" href="{{ url_for('change_password') }}">
   </head>
-  <body class="{{ 'full-view' if preferences.fullView else '' }}" data-current-path="{{ current_path|default('', true) }}">
+  <body class="{{ 'full-view' if preferences.fullView else '' }}" data-current-path="{{ current_path|default('', true) }}" data-root-label="{{ root_label }}">
     <header class="site-header">
       <div class="site-header-inner">
         <div class="site-brand">Filedrop</div>
         <div class="header-actions">
+          {% if user %}
+          <div class="notifications">
+            <button class="notifications-toggle" type="button" id="notifications-toggle" aria-label="Notifications" aria-expanded="false" aria-controls="notifications-panel">
+              <span aria-hidden="true">!</span>
+              <span class="notification-badge" id="notification-badge" hidden>0</span>
+            </button>
+            <div class="notifications-panel" id="notifications-panel" hidden>
+              <div class="settings-heading">Notifications</div>
+              <div class="notifications-list" id="notifications-list"></div>
+            </div>
+          </div>
+          {% endif %}
+          {% if user and not share %}
+          <div class="share">
+            <button class="share-toggle" type="button" id="share-toggle" aria-label="Share folder" aria-expanded="false" aria-controls="share-panel">
+              <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                <path d="M12 15V3m0 0 4 4m-4-4-4 4M6 11v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-8"/>
+              </svg>
+            </button>
+            <div class="share-panel" id="share-panel" hidden>
+              <div class="settings-heading">Share folder</div>
+              <div class="share-access-options" id="share-access-options" aria-label="Share access">
+                <button type="button" data-access-mode="restricted_edit">Editable to Invited Users</button>
+                <button type="button" data-access-mode="view">Viewable to all</button>
+                <button type="button" data-access-mode="edit">Editable to All</button>
+              </div>
+              <div class="share-editors" id="share-editors-group" hidden>
+                <label class="setting-label" for="share-editors-input">Invited editors</label>
+                <div class="share-editor-box" id="share-editor-box">
+                  <div class="share-editor-chips" id="share-editor-chips"></div>
+                  <input id="share-editors-input" autocomplete="off" placeholder="Type a username">
+                </div>
+                <div class="share-user-suggestions" id="share-user-suggestions" hidden></div>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+          {% if user %}
           <div class="account">
             <button class="account-toggle" type="button" id="account-toggle" aria-label="Account menu" aria-expanded="false" aria-controls="account-panel">
               <span class="avatar" style="background: {{ user.avatar_color }}">{{ user.username[0]|upper }}</span>
@@ -28,6 +66,9 @@
               </form>
             </div>
           </div>
+          {% else %}
+          <a class="sign-in-link" href="{{ url_for('login') }}">Sign in</a>
+          {% endif %}
           <div class="settings">
             <button class="settings-toggle" type="button" id="settings-toggle" aria-label="Settings" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
             <div class="settings-panel" id="settings-panel" hidden>
@@ -91,7 +132,17 @@
       </div>
       <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
-      <p class="status" id="status"></p>
+      <p class="status" id="status" hidden></p>
+      {% if share %}
+      <div class="share-notice" id="share-notice">
+        <span>This shared folder is viewable to anyone with the link.</span>
+        {% if share.requiresAccountToEdit %}
+          <a href="{{ url_for('register') }}">Request an account to edit</a>
+        {% elif not share.canEdit %}
+          <span>Downloads are available without an account.</span>
+        {% endif %}
+      </div>
+      {% endif %}
 
       <nav class="breadcrumbs" id="breadcrumbs" aria-label="Current folder"></nav>
 
@@ -148,6 +199,7 @@
     </main>
 
     <script>window.FILEDROP_PREFERENCES = {{ preferences|tojson }};</script>
+    <script>window.FILEDROP_SHARE_CONTEXT = {{ share|tojson }};</script>
     <script src="{{ url_for('static', filename='js/config.js') }}" defer></script>
     <script src="{{ url_for('static', filename='js/index.js') }}" defer></script>
   </body>

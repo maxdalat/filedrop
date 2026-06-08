@@ -84,6 +84,10 @@ def setup_required():
     return get_db().execute("SELECT 1 FROM users LIMIT 1").fetchone() is None
 
 
+def api_response_requested():
+    return request.path.startswith("/api/")
+
+
 @app.teardown_appcontext
 def close_db(_error=None):
     db = g.pop("db", None)
@@ -145,6 +149,25 @@ def init_db():
             path TEXT NOT NULL,
             created_at TEXT NOT NULL,
             PRIMARY KEY (user_id, upload_id)
+        );
+        CREATE TABLE IF NOT EXISTS share_links (
+            token TEXT PRIMARY KEY,
+            owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            root_path TEXT NOT NULL,
+            access_mode TEXT NOT NULL CHECK (access_mode IN ('view', 'edit', 'restricted_edit')),
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS share_editors (
+            share_token TEXT NOT NULL REFERENCES share_links(token) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            PRIMARY KEY (share_token, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS notification_states (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            notification_key TEXT NOT NULL,
+            read_at TEXT,
+            dismissed_at TEXT,
+            PRIMARY KEY (user_id, notification_key)
         );
         CREATE TABLE IF NOT EXISTS app_migrations (
             name TEXT PRIMARY KEY
@@ -273,6 +296,8 @@ def load_user_and_check_csrf():
     g.user = None
     g.session = None
     if setup_required() and request.endpoint not in {"setup", "setup_post", "static", "health"}:
+        if api_response_requested():
+            abort(503, description="Filedrop setup is required before using the API.")
         return redirect(url_for("setup"))
     session_id = verified_session_id(request.cookies.get(app.config["SESSION_COOKIE_NAME"]))
     if session_id:
@@ -303,9 +328,24 @@ def login_required(view):
                 abort(401, description="Sign in is required.")
             return redirect(url_for("login"))
         if g.user["must_change_password"] and request.endpoint not in {"change_password", "logout"}:
+            if request.path.startswith("/api/"):
+                abort(403, description="Change your password before using Filedrop.")
             return redirect(url_for("change_password"))
         return view(*args, **kwargs)
     return wrapped
+
+
+@app.after_request
+def prevent_api_html_redirects(response):
+    if request.path.startswith("/api/") and 300 <= response.status_code < 400:
+        location = response.headers.get("Location", "")
+        message = "Sign in is required." if "login" in location else "This API request could not be completed."
+        if "change-password" in location:
+            message = "Change your password before using Filedrop."
+        replacement = jsonify({"message": message, "redirect": location})
+        replacement.status_code = 401 if "login" in location else 403
+        return replacement
+    return response
 
 
 def admin_required(view):
@@ -364,9 +404,13 @@ def parse_upload_file(upload):
 
 
 def accessible_root():
-    if g.user["role"] == "admin":
-        return UPLOAD_ROOT
     home = (UPLOAD_ROOT / g.user["username"]).resolve()
+    home.mkdir(exist_ok=True)
+    return home
+
+
+def user_accessible_root(user):
+    home = (UPLOAD_ROOT / user["username"]).resolve()
     home.mkdir(exist_ok=True)
     return home
 
@@ -380,8 +424,8 @@ def resolve_upload_path(relative_path=""):
     return path
 
 
-def item_payload(path):
-    root = accessible_root()
+def item_payload(path, root=None):
+    root = root or accessible_root()
     relative_path = path.relative_to(root).as_posix()
     payload = {"name": path.name, "path": "" if relative_path == "." else relative_path, "type": "folder" if path.is_dir() else "file"}
     try:
@@ -403,17 +447,19 @@ def item_payload(path):
     return payload
 
 
-def ordered_items(folder):
-    root = accessible_root()
+def ordered_items(folder, root=None, user_id=None):
+    root = root or accessible_root()
     folder_path = "" if folder == root else folder.relative_to(root).as_posix()
-    positions = {
-        row["item_path"]: row["position"]
-        for row in get_db().execute(
-            "SELECT item_path, position FROM item_orders WHERE user_id = ? AND folder_path = ?",
-            (g.user["user_id"], folder_path),
-        )
-    }
-    items = [item_payload(path) for path in folder.iterdir()]
+    positions = {}
+    if user_id:
+        positions = {
+            row["item_path"]: row["position"]
+            for row in get_db().execute(
+                "SELECT item_path, position FROM item_orders WHERE user_id = ? AND folder_path = ?",
+                (user_id, folder_path),
+            )
+        }
+    items = [item_payload(path, root=root) for path in folder.iterdir()]
     return sorted(items, key=lambda item: (positions.get(item["path"], len(positions)), item["name"].casefold()))
 
 
@@ -437,13 +483,14 @@ def available_item_path(folder, item_path):
     return folder / f"{stem}_{counter}{suffix}"
 
 
-def prepare_item_moves(item_paths, destination_folder, replace_existing=False):
-    root = accessible_root()
+def prepare_item_moves(item_paths, destination_folder, replace_existing=False, root=None, resolver=None):
+    root = root or accessible_root()
+    resolver = resolver or resolve_upload_path
     moves = []
     for relative_path in item_paths:
         if not isinstance(relative_path, str):
             abort(400, description="Item paths must be text.")
-        item_path = resolve_upload_path(relative_path)
+        item_path = resolver(relative_path)
         if item_path == root or not item_path.exists():
             abort(404, description="File or folder was not found.")
         if item_path == destination_folder or (item_path.is_dir() and item_path in destination_folder.parents):
@@ -471,6 +518,176 @@ def execute_item_moves(moves, replace_existing=False):
     return moved
 
 
+def get_share(token):
+    row = get_db().execute(
+        """SELECT share_links.*, users.username, users.role
+           FROM share_links JOIN users ON users.id = share_links.owner_id
+           WHERE share_links.token = ?""",
+        (token,),
+    ).fetchone()
+    if not row:
+        abort(404, description="Share link was not found.")
+    return row
+
+
+def share_editors_payload(token):
+    return [
+        {"id": row["id"], "username": row["username"]}
+        for row in get_db().execute(
+            """SELECT users.id, users.username
+               FROM share_editors JOIN users ON users.id = share_editors.user_id
+               WHERE share_editors.share_token = ?
+               ORDER BY users.username COLLATE NOCASE""",
+            (token,),
+        )
+    ]
+
+
+def share_payload(share):
+    return {
+        "token": share["token"],
+        "url": url_for("share_browse_root", token=share["token"], _external=True),
+        "accessMode": share["access_mode"],
+        "editors": share_editors_payload(share["token"]),
+    }
+
+
+def find_owned_share_for_path(relative_path):
+    return get_db().execute(
+        "SELECT * FROM share_links WHERE owner_id = ? AND root_path = ? ORDER BY created_at DESC LIMIT 1",
+        (g.user["user_id"], relative_path),
+    ).fetchone()
+
+
+def approved_users_for_names(usernames):
+    db = get_db()
+    users = []
+    for username in dict.fromkeys(usernames):
+        user = db.execute(
+            "SELECT id, username FROM users WHERE username = ? COLLATE NOCASE AND status = 'approved'",
+            (username,),
+        ).fetchone()
+        if not user:
+            abort(404, description=f"Approved user {username} was not found.")
+        users.append(user)
+    return users
+
+
+def normalize_access_mode(value):
+    if value not in {"view", "edit", "restricted_edit"}:
+        abort(400, description="Choose a valid share access option.")
+    return value
+
+
+def notification_state_map(keys):
+    if not keys:
+        return {}
+    placeholders = ",".join("?" for _key in keys)
+    return {
+        row["notification_key"]: row
+        for row in get_db().execute(
+            f"SELECT * FROM notification_states WHERE user_id = ? AND notification_key IN ({placeholders})",
+            (g.user["user_id"], *keys),
+        )
+    }
+
+
+def current_notifications():
+    notifications = []
+    if g.user["role"] == "admin":
+        pending = get_db().execute("SELECT COUNT(*) AS count, COALESCE(MAX(id), 0) AS max_id FROM users WHERE status = 'pending'").fetchone()
+        pending_count = pending["count"]
+        if pending_count:
+            notifications.append({
+                "key": f"pending-users:{pending_count}:{pending['max_id']}",
+                "type": "admin_pending_users",
+                "title": f"{pending_count} account request{'' if pending_count == 1 else 's'} waiting",
+                "message": "Review pending user approvals.",
+                "url": url_for("admin"),
+                "count": pending_count,
+            })
+
+    for row in get_db().execute(
+        """SELECT share_links.token, share_links.root_path, share_links.created_at, users.username AS owner_username
+           FROM share_editors
+           JOIN share_links ON share_links.token = share_editors.share_token
+           JOIN users ON users.id = share_links.owner_id
+           WHERE share_editors.user_id = ?
+           ORDER BY share_links.created_at DESC""",
+        (g.user["user_id"],),
+    ):
+        folder_name = Path(row["root_path"]).name if row["root_path"] else row["owner_username"]
+        notifications.append({
+            "key": f"share:{row['token']}",
+            "type": "shared_folder",
+            "title": f"{row['owner_username']} shared {folder_name} with you",
+            "message": "Open the shared folder.",
+            "url": url_for("share_browse_root", token=row["token"]),
+            "count": 1,
+        })
+
+    states = notification_state_map([notification["key"] for notification in notifications])
+    visible = []
+    for notification in notifications:
+        state = states.get(notification["key"])
+        if state and state["dismissed_at"]:
+            continue
+        notification["read"] = bool(state and state["read_at"])
+        visible.append(notification)
+    return visible
+
+
+def share_root(share):
+    owner_root = user_accessible_root(share)
+    parts = validate_relative_path(share["root_path"])
+    root = (owner_root / Path(*parts)).resolve() if parts else owner_root
+    if root != owner_root and owner_root not in root.parents:
+        abort(400, description="Shared folder is outside the owner's upload folder.")
+    if not root.exists() or not root.is_dir():
+        abort(404, description="Shared folder was not found.")
+    return root
+
+
+def resolve_share_path(share, relative_path=""):
+    root = share_root(share)
+    parts = validate_relative_path(relative_path or "")
+    path = (root / Path(*parts)).resolve() if parts else root
+    if path != root and root not in path.parents:
+        abort(400, description="Path is outside the shared folder.")
+    return path, root
+
+
+def can_edit_share(share):
+    if not g.user:
+        return False
+    if g.user["user_id"] == share["owner_id"]:
+        return True
+    if share["access_mode"] == "edit":
+        return True
+    if share["access_mode"] != "restricted_edit":
+        return False
+    return get_db().execute(
+        "SELECT 1 FROM share_editors WHERE share_token = ? AND user_id = ?",
+        (share["token"], g.user["user_id"]),
+    ).fetchone() is not None
+
+
+def share_edit_required(share):
+    if not g.user:
+        abort(401, description="Create an account or sign in to edit this shared folder.")
+    if not can_edit_share(share):
+        abort(403, description="You do not have edit access to this shared folder.")
+
+
+def share_item_payload(path, root):
+    return item_payload(path, root=root)
+
+
+def share_parent_path(folder, root):
+    parent_path = folder.parent.relative_to(root).as_posix() if folder != root else ""
+    return "" if parent_path == "." else parent_path
+
+
 def render_browser(relative_path=""):
     folder = resolve_upload_path(relative_path)
     if not folder.exists() or not folder.is_dir():
@@ -484,9 +701,48 @@ def render_browser(relative_path=""):
             csrf_token=g.session["csrf_token"],
             preferences=user_preferences(),
             user=g.user,
+            share=None,
+            root_label=g.user["username"],
         )
     )
     response.headers["Cache-Control"] = "private, max-age=30" if request.headers.get("X-Filedrop-Prefetch") == "1" else "private, no-cache"
+    return response
+
+
+def render_share_browser(token, relative_path=""):
+    share = get_share(token)
+    folder, root = resolve_share_path(share, relative_path)
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+    current_path = "" if folder == root else folder.relative_to(root).as_posix()
+    preferences = user_preferences() if g.user else {
+        "theme": "system",
+        "conflictMode": "add",
+        "parallelUploads": DEFAULT_PARALLEL_UPLOADS,
+        "confirmSingleDelete": True,
+        "confirmBulkDelete": True,
+        "fullView": False,
+        "sortBy": "manual",
+        "sortDirection": "asc",
+    }
+    response = make_response(
+        render_template(
+            "index.html",
+            current_path=current_path,
+            csrf_token=g.session["csrf_token"] if g.session else "",
+            preferences=preferences,
+            user=g.user,
+            share={
+                "token": token,
+                "url": url_for("share_browse_root", token=token, _external=True),
+                "canEdit": can_edit_share(share),
+                "requiresAccountToEdit": share["access_mode"] in {"edit", "restricted_edit"} and not g.user,
+                "accessMode": share["access_mode"],
+            },
+            root_label=share["username"],
+        )
+    )
+    response.headers["Cache-Control"] = "private, no-cache"
     return response
 
 
@@ -715,6 +971,21 @@ def browse(relative_path):
     return render_browser(relative_path)
 
 
+@app.get("/s/<token>")
+def share_browse_root(token):
+    return render_share_browser(token)
+
+
+@app.get("/s/<token>/browse/")
+def share_browse_slash(token):
+    return render_share_browser(token)
+
+
+@app.get("/s/<token>/browse/<path:relative_path>")
+def share_browse(token, relative_path):
+    return render_share_browser(token, relative_path)
+
+
 @app.get("/api/health")
 def health():
     get_db().execute("SELECT 1").fetchone()
@@ -770,6 +1041,159 @@ def update_preferences():
     return jsonify(preferences)
 
 
+@app.get("/api/notifications")
+@login_required
+def notifications():
+    items = current_notifications()
+    unread_count = sum(item["count"] for item in items if not item["read"])
+    return jsonify({"notifications": items, "unreadCount": unread_count})
+
+
+@app.post("/api/notifications/read")
+@login_required
+def read_notifications():
+    data = request.get_json(silent=True) or {}
+    keys = data.get("keys", [])
+    if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
+        abort(400, description="Notification keys must be a list of text values.")
+    now = iso_time(utc_now())
+    get_db().executemany(
+        """INSERT INTO notification_states (user_id, notification_key, read_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(user_id, notification_key) DO UPDATE SET read_at = excluded.read_at""",
+        ((g.user["user_id"], key, now) for key in keys),
+    )
+    get_db().commit()
+    return jsonify({"read": len(keys)})
+
+
+@app.delete("/api/notifications/<path:notification_key>")
+@login_required
+def dismiss_notification(notification_key):
+    now = iso_time(utc_now())
+    get_db().execute(
+        """INSERT INTO notification_states (user_id, notification_key, read_at, dismissed_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(user_id, notification_key)
+           DO UPDATE SET read_at = excluded.read_at, dismissed_at = excluded.dismissed_at""",
+        (g.user["user_id"], notification_key, now, now),
+    )
+    get_db().commit()
+    return "", 204
+
+
+@app.post("/api/shares")
+@login_required
+def create_share():
+    data = request.get_json(silent=True) or {}
+    folder = resolve_upload_path(data.get("path", ""))
+    root = accessible_root()
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+    access_mode = normalize_access_mode(data.get("accessMode", "view"))
+    editor_names = data.get("editors", [])
+    if not isinstance(editor_names, list):
+        abort(400, description="Editors must be a list of usernames.")
+    editor_names = [name.strip() for name in editor_names if isinstance(name, str) and name.strip()]
+    if access_mode != "restricted_edit":
+        editor_names = []
+    db = get_db()
+    editors = approved_users_for_names(editor_names)
+    shared_path = "" if folder == root else folder.relative_to(root).as_posix()
+    existing = find_owned_share_for_path(shared_path)
+    if existing:
+        db.execute("UPDATE share_links SET access_mode = ? WHERE token = ?", (access_mode, existing["token"]))
+        db.execute("DELETE FROM share_editors WHERE share_token = ?", (existing["token"],))
+        db.executemany(
+            "INSERT INTO share_editors (share_token, user_id) VALUES (?, ?)",
+            ((existing["token"], editor["id"]) for editor in editors),
+        )
+        db.commit()
+        return jsonify(share_payload(get_share(existing["token"])))
+
+    token = secrets.token_urlsafe(6)
+    while db.execute("SELECT 1 FROM share_links WHERE token = ?", (token,)).fetchone():
+        token = secrets.token_urlsafe(6)
+    db.execute(
+        "INSERT INTO share_links (token, owner_id, root_path, access_mode, created_at) VALUES (?, ?, ?, ?, ?)",
+        (token, g.user["user_id"], shared_path, access_mode, iso_time(utc_now())),
+    )
+    db.executemany(
+        "INSERT INTO share_editors (share_token, user_id) VALUES (?, ?)",
+        ((token, editor["id"]) for editor in editors),
+    )
+    db.commit()
+    return jsonify(share_payload(get_share(token))), 201
+
+
+@app.get("/api/shares/current")
+@login_required
+def current_share():
+    folder = resolve_upload_path(request.args.get("path", ""))
+    root = accessible_root()
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+    shared_path = "" if folder == root else folder.relative_to(root).as_posix()
+    share = find_owned_share_for_path(shared_path)
+    return jsonify({"share": share_payload(share) if share else None})
+
+
+@app.patch("/api/shares/<token>")
+@login_required
+def update_share(token):
+    share = get_share(token)
+    if share["owner_id"] != g.user["user_id"]:
+        abort(403, description="Only the owner can change this share link.")
+    data = request.get_json(silent=True) or {}
+    access_mode = normalize_access_mode(data.get("accessMode", share["access_mode"]))
+    editor_names = data.get("editors", [])
+    if not isinstance(editor_names, list):
+        abort(400, description="Editors must be a list of usernames.")
+    editor_names = [name.strip() for name in editor_names if isinstance(name, str) and name.strip()]
+    if access_mode != "restricted_edit":
+        editor_names = []
+    editors = approved_users_for_names(editor_names)
+    db = get_db()
+    db.execute("UPDATE share_links SET access_mode = ? WHERE token = ?", (access_mode, token))
+    db.execute("DELETE FROM share_editors WHERE share_token = ?", (token,))
+    db.executemany(
+        "INSERT INTO share_editors (share_token, user_id) VALUES (?, ?)",
+        ((token, editor["id"]) for editor in editors),
+    )
+    db.commit()
+    return jsonify(share_payload(get_share(token)))
+
+
+@app.delete("/api/shares/<token>")
+@login_required
+def delete_share(token):
+    share = get_share(token)
+    if share["owner_id"] != g.user["user_id"]:
+        abort(403, description="Only the owner can remove this share link.")
+    get_db().execute("DELETE FROM share_links WHERE token = ?", (token,))
+    get_db().commit()
+    return "", 204
+
+
+@app.get("/api/users/search")
+@login_required
+def search_users():
+    query = request.args.get("q", "").strip()
+    if len(query) < 1:
+        return jsonify({"users": []})
+    users = [
+        {"id": row["id"], "username": row["username"]}
+        for row in get_db().execute(
+            """SELECT id, username FROM users
+               WHERE status = 'approved' AND username LIKE ? COLLATE NOCASE
+               ORDER BY username COLLATE NOCASE
+               LIMIT 8""",
+            (f"{query}%",),
+        )
+    ]
+    return jsonify({"users": users})
+
+
 @app.get("/api/items")
 @login_required
 def items():
@@ -779,6 +1203,20 @@ def items():
         abort(404, description="Folder was not found.")
     parent_path = folder.parent.relative_to(root).as_posix() if folder != root else ""
     return jsonify({"items": ordered_items(folder), "parent": "" if parent_path == "." else parent_path, "path": "" if folder == root else folder.relative_to(root).as_posix()})
+
+
+@app.get("/api/shares/<token>/items")
+def shared_items(token):
+    share = get_share(token)
+    folder, root = resolve_share_path(share, request.args.get("path", ""))
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+    user_id = g.user["user_id"] if g.user else None
+    return jsonify({
+        "items": ordered_items(folder, root=root, user_id=user_id),
+        "parent": share_parent_path(folder, root),
+        "path": "" if folder == root else folder.relative_to(root).as_posix(),
+    })
 
 
 @app.post("/api/folders")
@@ -794,6 +1232,23 @@ def create_folder():
         abort(409, description="A file or folder with that name already exists.")
     new_folder.mkdir()
     return jsonify(item_payload(new_folder)), 201
+
+
+@app.post("/api/shares/<token>/folders")
+def create_shared_folder(token):
+    share = get_share(token)
+    share_edit_required(share)
+    data = request.get_json(silent=True) or {}
+    folder, root = resolve_share_path(share, data.get("path", ""))
+    name = data.get("name", "")
+    validate_name(name, "Folder names")
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+    new_folder = folder / name
+    if new_folder.exists():
+        abort(409, description="A file or folder with that name already exists.")
+    new_folder.mkdir()
+    return jsonify(share_item_payload(new_folder, root)), 201
 
 
 @app.post("/api/folders/tree")
@@ -831,6 +1286,45 @@ def create_folder_tree():
     return jsonify({"created": created}), 201
 
 
+@app.post("/api/shares/<token>/folders/tree")
+def create_shared_folder_tree(token):
+    share = get_share(token)
+    share_edit_required(share)
+    data = request.get_json(silent=True) or {}
+    root_folder, share_root_path = resolve_share_path(share, data.get("path", ""))
+    directories = data.get("directories", [])
+    if not root_folder.exists() or not root_folder.is_dir():
+        abort(404, description="Folder was not found.")
+    if not isinstance(directories, list):
+        abort(400, description="Directories must be a list of paths.")
+    if not all(isinstance(path, str) for path in directories):
+        abort(400, description="Directory paths must be text.")
+
+    tree = []
+    for relative_path in sorted(set(directories), key=lambda path: (path.count("/"), path)):
+        parts = validate_relative_path(relative_path, "Directory paths")
+        if not parts:
+            continue
+        base = data.get("path", "").strip("/")
+        directory, _root = resolve_share_path(share, "/".join([base, *parts]))
+        for ancestor in [directory, *directory.parents]:
+            if ancestor.exists() and not ancestor.is_dir():
+                abort(409, description=f"A file already exists in the path for {relative_path}.")
+            if ancestor == root_folder:
+                break
+            if ancestor == share_root_path:
+                break
+        tree.append(directory)
+
+    created = 0
+    for directory in tree:
+        if directory.exists():
+            continue
+        directory.mkdir(parents=True)
+        created += 1
+    return jsonify({"created": created}), 201
+
+
 @app.post("/api/folders/from-selection")
 @login_required
 def create_folder_from_selection():
@@ -852,6 +1346,30 @@ def create_folder_from_selection():
     return jsonify({"folder": item_payload(new_folder), "moved": moved}), 201
 
 
+@app.post("/api/shares/<token>/folders/from-selection")
+def create_shared_folder_from_selection(token):
+    share = get_share(token)
+    share_edit_required(share)
+    data = request.get_json(silent=True) or {}
+    folder, root = resolve_share_path(share, data.get("path", ""))
+    name = data.get("name", "")
+    item_paths = data.get("paths", [])
+    validate_name(name, "Folder names")
+    if not isinstance(item_paths, list) or not item_paths:
+        abort(400, description="Select at least one file or folder.")
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+    new_folder = folder / name
+    if new_folder.exists():
+        abort(409, description="A file or folder with that name already exists.")
+    replace_existing = data.get("replace") is True
+    resolver = lambda path: resolve_share_path(share, path)[0]
+    moves = prepare_item_moves(item_paths, new_folder, replace_existing=replace_existing, root=root, resolver=resolver)
+    new_folder.mkdir()
+    moved = execute_item_moves(moves, replace_existing=replace_existing)
+    return jsonify({"folder": share_item_payload(new_folder, root), "moved": moved}), 201
+
+
 @app.patch("/api/items")
 @login_required
 def rename_item():
@@ -867,6 +1385,23 @@ def rename_item():
     return jsonify(item_payload(destination))
 
 
+@app.patch("/api/shares/<token>/items")
+def rename_shared_item(token):
+    share = get_share(token)
+    share_edit_required(share)
+    data = request.get_json(silent=True) or {}
+    item_path, root = resolve_share_path(share, data.get("path", ""))
+    new_name = data.get("name", "")
+    validate_name(new_name)
+    if item_path == root or not item_path.exists():
+        abort(404, description="File or folder was not found.")
+    destination = item_path.with_name(new_name)
+    if destination.exists():
+        abort(409, description="A file or folder with that name already exists.")
+    item_path.rename(destination)
+    return jsonify(share_item_payload(destination, root))
+
+
 @app.post("/api/items/move")
 @login_required
 def move_items():
@@ -880,6 +1415,24 @@ def move_items():
 
     replace_existing = data.get("replace") is True
     moves = prepare_item_moves(item_paths, destination_folder, replace_existing=replace_existing)
+    return jsonify({"moved": execute_item_moves(moves, replace_existing=replace_existing)})
+
+
+@app.post("/api/shares/<token>/items/move")
+def move_shared_items(token):
+    share = get_share(token)
+    share_edit_required(share)
+    data = request.get_json(silent=True) or {}
+    destination_folder, root = resolve_share_path(share, data.get("destination", ""))
+    item_paths = data.get("paths", [])
+    if not isinstance(item_paths, list) or not item_paths:
+        abort(400, description="Select at least one file or folder to move.")
+    if not destination_folder.exists() or not destination_folder.is_dir():
+        abort(404, description="Destination folder was not found.")
+
+    replace_existing = data.get("replace") is True
+    resolver = lambda path: resolve_share_path(share, path)[0]
+    moves = prepare_item_moves(item_paths, destination_folder, replace_existing=replace_existing, root=root, resolver=resolver)
     return jsonify({"moved": execute_item_moves(moves, replace_existing=replace_existing)})
 
 
@@ -908,11 +1461,47 @@ def reorder_items():
     return jsonify({"ordered": len(item_paths)})
 
 
+@app.put("/api/shares/<token>/items/order")
+def reorder_shared_items(token):
+    share = get_share(token)
+    share_edit_required(share)
+    data = request.get_json(silent=True) or {}
+    folder, root = resolve_share_path(share, data.get("path", ""))
+    item_paths = data.get("paths", [])
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder was not found.")
+    if not isinstance(item_paths, list) or not all(isinstance(path, str) for path in item_paths):
+        abort(400, description="Item paths must be a list of text paths.")
+    actual_paths = {share_item_payload(path, root)["path"] for path in folder.iterdir()}
+    if len(item_paths) != len(set(item_paths)) or set(item_paths) != actual_paths:
+        abort(400, description="The item order must include every item in the folder exactly once.")
+    folder_path = "" if folder == root else folder.relative_to(root).as_posix()
+    db = get_db()
+    db.execute("DELETE FROM item_orders WHERE user_id = ? AND folder_path = ?", (g.user["user_id"], folder_path))
+    db.executemany(
+        "INSERT INTO item_orders (user_id, folder_path, item_path, position) VALUES (?, ?, ?, ?)",
+        ((g.user["user_id"], folder_path, item_path, position) for position, item_path in enumerate(item_paths)),
+    )
+    db.commit()
+    return jsonify({"ordered": len(item_paths)})
+
+
 @app.delete("/api/items")
 @login_required
 def delete_item():
     item_path = resolve_upload_path(request.args.get("path", ""))
     if item_path == accessible_root() or not item_path.exists():
+        abort(404, description="File or folder was not found.")
+    shutil.rmtree(item_path) if item_path.is_dir() else item_path.unlink()
+    return "", 204
+
+
+@app.delete("/api/shares/<token>/items")
+def delete_shared_item(token):
+    share = get_share(token)
+    share_edit_required(share)
+    item_path, root = resolve_share_path(share, request.args.get("path", ""))
+    if item_path == root or not item_path.exists():
         abort(404, description="File or folder was not found.")
     shutil.rmtree(item_path) if item_path.is_dir() else item_path.unlink()
     return "", 204
@@ -934,8 +1523,9 @@ def upload_file():
             return jsonify({"filename": Path(receipt["path"]).name, "path": receipt["path"]}), 200
     filename = parse_upload_file(request.files.get("file"))
     folder = resolve_upload_path(request.form.get("path", ""))
-    if not folder.exists() or not folder.is_dir():
-        abort(404, description="Folder was not found.")
+    if folder.exists() and not folder.is_dir():
+        abort(409, description="A file already exists in the upload path.")
+    folder.mkdir(parents=True, exist_ok=True)
     replace_existing = request.form.get("replace", "").lower() in {"1", "true", "yes"}
     saved_filename = filename if replace_existing else available_filename(folder, filename)
     destination = folder / saved_filename
@@ -952,6 +1542,28 @@ def upload_file():
     return jsonify({"filename": saved_filename, "path": saved_path}), 201
 
 
+@app.post("/api/shares/<token>/files")
+def upload_shared_file(token):
+    share = get_share(token)
+    share_edit_required(share)
+    upload_id = request.headers.get("X-Upload-ID", "").strip()
+    if upload_id and (len(upload_id) > 100 or not upload_id.replace("-", "").isalnum()):
+        abort(400, description="Upload ID is invalid.")
+    filename = parse_upload_file(request.files.get("file"))
+    folder, root = resolve_share_path(share, request.form.get("path", ""))
+    if folder.exists() and not folder.is_dir():
+        abort(409, description="A file already exists in the upload path.")
+    folder.mkdir(parents=True, exist_ok=True)
+    replace_existing = request.form.get("replace", "").lower() in {"1", "true", "yes"}
+    saved_filename = filename if replace_existing else available_filename(folder, filename)
+    destination = folder / saved_filename
+    if replace_existing and destination.exists() and destination.is_dir():
+        abort(409, description="A folder with that name already exists.")
+    request.files["file"].save(destination)
+    saved_path = destination.relative_to(root).as_posix()
+    return jsonify({"filename": saved_filename, "path": saved_path}), 201
+
+
 @app.get("/api/files/<path:filename>")
 @login_required
 def download_file(filename):
@@ -961,10 +1573,29 @@ def download_file(filename):
     return send_from_directory(file_path.parent, file_path.name, as_attachment=True)
 
 
+@app.get("/api/shares/<token>/files/<path:filename>")
+def download_shared_file(token, filename):
+    share = get_share(token)
+    file_path, _root = resolve_share_path(share, filename)
+    if not file_path.exists() or not file_path.is_file():
+        abort(404, description="File was not found.")
+    return send_from_directory(file_path.parent, file_path.name, as_attachment=True)
+
+
 @app.get("/api/previews/<path:filename>")
 @login_required
 def preview_file(filename):
     file_path = resolve_upload_path(filename)
+    extension = file_path.suffix.lstrip(".").lower()
+    if not file_path.exists() or not file_path.is_file() or extension not in IMAGE_PREVIEW_EXTENSIONS | VIDEO_PREVIEW_EXTENSIONS:
+        abort(404, description="Preview was not found.")
+    return send_from_directory(file_path.parent, file_path.name)
+
+
+@app.get("/api/shares/<token>/previews/<path:filename>")
+def preview_shared_file(token, filename):
+    share = get_share(token)
+    file_path, _root = resolve_share_path(share, filename)
     extension = file_path.suffix.lstrip(".").lower()
     if not file_path.exists() or not file_path.is_file() or extension not in IMAGE_PREVIEW_EXTENSIONS | VIDEO_PREVIEW_EXTENSIONS:
         abort(404, description="Preview was not found.")

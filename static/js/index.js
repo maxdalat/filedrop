@@ -1,14 +1,31 @@
 const config = window.FILEDROP_CONFIG;
 const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+const shareContext = window.FILEDROP_SHARE_CONTEXT || null;
+const isShareMode = Boolean(shareContext?.token);
+const canEdit = !isShareMode || shareContext.canEdit === true;
+const rootLabel = document.body.dataset.rootLabel || "Files";
 const originalFetch = window.fetch.bind(window);
-window.fetch = (resource, options = {}) => {
+window.fetch = async (resource, options = {}) => {
   const method = (options.method || "GET").toUpperCase();
   const url = typeof resource === "string" ? new URL(resource, window.location.href) : new URL(resource.url);
-  if (url.origin === window.location.origin && ["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+  if (csrfToken && url.origin === window.location.origin && ["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
     options.headers = new Headers(options.headers || {});
     options.headers.set("X-CSRF-Token", csrfToken);
   }
-  return originalFetch(resource, options);
+  const response = await originalFetch(resource, options);
+  if (url.origin === window.location.origin && url.pathname.startsWith("/api/")) {
+    const contentType = response.headers.get("Content-Type") || "";
+    if (response.redirected || contentType.includes("text/html")) {
+      const message = response.redirected
+        ? "Sign in again before using Filedrop."
+        : `The server returned a page instead of data for ${url.pathname}.`;
+      return new Response(JSON.stringify({ message }), {
+        status: response.redirected ? 401 : (response.status || 500),
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+  return response;
 };
 const form = document.querySelector("#upload-form");
 const input = document.querySelector("#file-input");
@@ -49,6 +66,17 @@ const breadcrumbs = document.querySelector("#breadcrumbs");
 const contextMenu = document.querySelector("#context-menu");
 const accountToggle = document.querySelector("#account-toggle");
 const accountPanel = document.querySelector("#account-panel");
+const notificationsToggle = document.querySelector("#notifications-toggle");
+const notificationsPanel = document.querySelector("#notifications-panel");
+const notificationsList = document.querySelector("#notifications-list");
+const notificationBadge = document.querySelector("#notification-badge");
+const shareToggle = document.querySelector("#share-toggle");
+const sharePanel = document.querySelector("#share-panel");
+const shareAccessButtons = Array.from(document.querySelectorAll("[data-access-mode]"));
+const shareEditorsGroup = document.querySelector("#share-editors-group");
+const shareEditorsInput = document.querySelector("#share-editors-input");
+const shareEditorChips = document.querySelector("#share-editor-chips");
+const shareUserSuggestions = document.querySelector("#share-user-suggestions");
 const folderPopover = document.querySelector("#folder-popover");
 const folderPopoverLabel = document.querySelector("#folder-popover-label");
 const folderNameInput = document.querySelector("#folder-name-input");
@@ -83,6 +111,19 @@ const pendingItemLoads = new Map();
 const prefetchedFolderPages = new Set();
 const pendingUploadItems = new Map();
 let activeUploadRun;
+let currentShare;
+let shareAccessMode = "view";
+let shareEditors = [];
+let shareSuggestionAbort;
+let shareSaveTimer;
+let isPopulatingSharePanel = false;
+
+if (!canEdit) {
+  form.hidden = true;
+  selectAllCheckbox.closest(".select-all-control").hidden = true;
+  selectionCount.hidden = true;
+  deleteSelectedButton.hidden = true;
+}
 
 function closeUploadChoiceMenu() {
   uploadChoiceMenu.hidden = true;
@@ -123,6 +164,58 @@ function showToast(message) {
   }, config.toastVisibleMs);
 }
 
+function showErrorPopup(message) {
+  if (!message) {
+    return;
+  }
+  const toast = document.createElement("div");
+  toast.className = "action-toast error-toast";
+  toast.textContent = message;
+  toastContainer.append(toast);
+  updateToastPosition();
+  window.requestAnimationFrame(() => toast.classList.add("is-visible"));
+  window.setTimeout(() => {
+    toast.classList.add("is-removing");
+    window.setTimeout(() => toast.remove(), config.animationDurationMs);
+  }, Math.max(config.toastVisibleMs, 4200));
+}
+
+let statusMessage = "";
+Object.defineProperty(status, "textContent", {
+  get() {
+    return statusMessage;
+  },
+  set(value) {
+    statusMessage = String(value || "");
+    if (!statusMessage) {
+      return;
+    }
+    if (/could not|failed|required|invalid|error|sign in|missing|cannot|unable|denied|outside/i.test(statusMessage)) {
+      showErrorPopup(statusMessage);
+    } else {
+      showToast(statusMessage);
+    }
+  },
+});
+
+async function responseJson(response) {
+  const text = await response.text();
+  if (!text) {
+    return {};
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    const url = response.url ? new URL(response.url, window.location.href).pathname : "the API";
+    return {
+      htmlResponse: true,
+      message: response.ok
+        ? `The server returned a page instead of data for ${url}.`
+        : `The server returned a page instead of data for ${url} (${response.status}).`,
+    };
+  }
+}
+
 new MutationObserver(updateToastPosition).observe(uploadPanel, { attributes: true, attributeFilter: ["class"] });
 window.addEventListener("resize", updateToastPosition);
 
@@ -142,16 +235,50 @@ window.FILEDROP_THEME.apply(themeSelect.value);
 settingsToggle.addEventListener("click", () => {
   const isOpen = settingsPanel.hidden;
   closeAccountPanel();
+  closeSharePanel();
+  closeNotificationsPanel();
   settingsPanel.hidden = !isOpen;
   settingsToggle.setAttribute("aria-expanded", String(isOpen));
 });
 
-accountToggle.addEventListener("click", () => {
-  const isOpen = accountPanel.hidden;
-  closeSettingsPanel();
-  accountPanel.hidden = !isOpen;
-  accountToggle.setAttribute("aria-expanded", String(isOpen));
-});
+if (accountToggle) {
+  accountToggle.addEventListener("click", () => {
+    const isOpen = accountPanel.hidden;
+    closeSettingsPanel();
+    closeSharePanel();
+    closeNotificationsPanel();
+    accountPanel.hidden = !isOpen;
+    accountToggle.setAttribute("aria-expanded", String(isOpen));
+  });
+}
+
+if (notificationsToggle) {
+  notificationsToggle.addEventListener("click", () => {
+    const isOpen = notificationsPanel.hidden;
+    closeSettingsPanel();
+    closeAccountPanel();
+    closeSharePanel();
+    notificationsPanel.hidden = !isOpen;
+    notificationsToggle.setAttribute("aria-expanded", String(isOpen));
+    if (isOpen) {
+      markNotificationsRead();
+    }
+  });
+}
+
+if (shareToggle) {
+  shareToggle.addEventListener("click", () => {
+    const isOpen = sharePanel.hidden;
+    closeSettingsPanel();
+    closeAccountPanel();
+    closeNotificationsPanel();
+    sharePanel.hidden = !isOpen;
+    shareToggle.setAttribute("aria-expanded", String(isOpen));
+    if (isOpen) {
+      loadCurrentShare();
+    }
+  });
+}
 
 function closeSettingsPanel() {
   settingsPanel.hidden = true;
@@ -159,11 +286,33 @@ function closeSettingsPanel() {
 }
 
 function closeAccountPanel() {
+  if (!accountPanel || !accountToggle) {
+    return;
+  }
   accountPanel.hidden = true;
   accountToggle.setAttribute("aria-expanded", "false");
 }
 
+function closeSharePanel() {
+  if (!sharePanel || !shareToggle) {
+    return;
+  }
+  sharePanel.hidden = true;
+  shareToggle.setAttribute("aria-expanded", "false");
+}
+
+function closeNotificationsPanel() {
+  if (!notificationsPanel || !notificationsToggle) {
+    return;
+  }
+  notificationsPanel.hidden = true;
+  notificationsToggle.setAttribute("aria-expanded", "false");
+}
+
 async function savePreferences(preferences) {
+  if (!csrfToken) {
+    return;
+  }
   try {
     const response = await fetch("/api/preferences", {
       method: "PATCH",
@@ -250,6 +399,328 @@ function updateSortButtons() {
   });
 }
 
+let currentNotifications = [];
+
+function updateNotificationBadge(unreadCount) {
+  if (!notificationBadge || !notificationsToggle) {
+    return;
+  }
+  notificationBadge.hidden = unreadCount <= 0;
+  notificationBadge.textContent = String(Math.min(unreadCount, 99));
+  notificationsToggle.classList.toggle("has-unread", unreadCount > 0);
+}
+
+function renderNotifications(data) {
+  if (!notificationsList) {
+    return;
+  }
+  currentNotifications = data.notifications || [];
+  notificationsList.innerHTML = "";
+  updateNotificationBadge(data.unreadCount || 0);
+  if (!currentNotifications.length) {
+    const empty = document.createElement("div");
+    empty.className = "notification-empty";
+    empty.textContent = "No notifications";
+    notificationsList.append(empty);
+    return;
+  }
+  currentNotifications.forEach((notification) => {
+    const item = document.createElement("div");
+    const link = document.createElement("a");
+    const title = document.createElement("span");
+    const message = document.createElement("span");
+    const dismiss = document.createElement("button");
+    item.className = "notification-item";
+    item.classList.toggle("is-unread", !notification.read);
+    link.href = notification.url;
+    title.className = "notification-title";
+    title.textContent = notification.title;
+    message.className = "notification-message";
+    message.textContent = notification.message;
+    dismiss.type = "button";
+    dismiss.className = "notification-dismiss";
+    dismiss.textContent = "×";
+    dismiss.setAttribute("aria-label", `Dismiss ${notification.title}`);
+    dismiss.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await dismissNotification(notification.key);
+    });
+    link.append(title, message);
+    item.append(link, dismiss);
+    notificationsList.append(item);
+  });
+}
+
+async function loadNotifications() {
+  if (!notificationsList) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/notifications");
+    const data = await responseJson(response);
+    if (!response.ok) {
+      return;
+    }
+    renderNotifications(data);
+  } catch {
+    updateNotificationBadge(0);
+  }
+}
+
+async function markNotificationsRead() {
+  const keys = currentNotifications.filter((notification) => !notification.read).map((notification) => notification.key);
+  if (!keys.length) {
+    updateNotificationBadge(0);
+    return;
+  }
+  currentNotifications = currentNotifications.map((notification) => ({ ...notification, read: true }));
+  renderNotifications({ notifications: currentNotifications, unreadCount: 0 });
+  try {
+    await fetch("/api/notifications/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keys }),
+    });
+  } catch {
+    loadNotifications();
+  }
+}
+
+async function dismissNotification(key) {
+  try {
+    const response = await fetch(`/api/notifications/${encodeURIComponent(key)}`, { method: "DELETE" });
+    if (!response.ok) {
+      const data = await responseJson(response);
+      status.textContent = data.message || "Could not dismiss notification.";
+      return;
+    }
+    currentNotifications = currentNotifications.filter((notification) => notification.key !== key);
+    const unreadCount = currentNotifications.reduce((total, notification) => total + (notification.read ? 0 : notification.count || 1), 0);
+    renderNotifications({ notifications: currentNotifications, unreadCount });
+  } catch {
+    status.textContent = "Could not dismiss notification.";
+  }
+}
+
+function setShareAccessMode(mode, options = {}) {
+  const showActive = options.showActive !== false;
+  shareAccessMode = mode;
+  shareAccessButtons.forEach((button) => {
+    const isActive = showActive && button.dataset.accessMode === mode;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+  if (shareEditorsGroup) {
+    shareEditorsGroup.hidden = mode !== "restricted_edit";
+  }
+}
+
+function scheduleShareSave() {
+  if (!shareToggle || isShareMode || isPopulatingSharePanel) {
+    return;
+  }
+  const path = currentPath;
+  const token = currentShare?.token;
+  window.clearTimeout(shareSaveTimer);
+  shareSaveTimer = window.setTimeout(() => {
+    saveShareSettings({ path, token });
+  }, 450);
+}
+
+function updateShareButtonState() {
+  if (!shareToggle) {
+    return;
+  }
+  shareToggle.classList.toggle("is-shared", Boolean(currentShare));
+  shareToggle.setAttribute("aria-label", currentShare ? "Manage shared folder" : "Share folder");
+}
+
+function renderShareEditors() {
+  if (!shareEditorChips) {
+    return;
+  }
+  shareEditorChips.innerHTML = "";
+  shareEditors.forEach((editor) => {
+    const chip = document.createElement("span");
+    const label = document.createElement("span");
+    const remove = document.createElement("button");
+    chip.className = "share-editor-chip";
+    label.textContent = editor.username;
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove ${editor.username}`);
+    remove.addEventListener("click", () => {
+      shareEditors = shareEditors.filter((candidate) => candidate.username.toLowerCase() !== editor.username.toLowerCase());
+      renderShareEditors();
+      scheduleShareSave();
+    });
+    chip.append(label, remove);
+    shareEditorChips.append(chip);
+  });
+}
+
+function addShareEditor(user) {
+  if (!user?.username || shareEditors.some((editor) => editor.username.toLowerCase() === user.username.toLowerCase())) {
+    shareEditorsInput.value = "";
+    shareUserSuggestions.hidden = true;
+    return;
+  }
+  shareEditors.push({ id: user.id, username: user.username });
+  shareEditorsInput.value = "";
+  shareUserSuggestions.hidden = true;
+  renderShareEditors();
+  scheduleShareSave();
+}
+
+async function loadShareSuggestions(query) {
+  if (!shareUserSuggestions) {
+    return;
+  }
+  shareSuggestionAbort?.abort();
+  if (!query.trim()) {
+    shareUserSuggestions.hidden = true;
+    shareUserSuggestions.innerHTML = "";
+    return;
+  }
+  const controller = new AbortController();
+  shareSuggestionAbort = controller;
+  try {
+    const response = await fetch(`/api/users/search?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal });
+    const data = await responseJson(response);
+    if (!response.ok) {
+      return;
+    }
+    const selected = new Set(shareEditors.map((editor) => editor.username.toLowerCase()));
+    const users = (data.users || []).filter((user) => !selected.has(user.username.toLowerCase()));
+    shareUserSuggestions.innerHTML = "";
+    users.forEach((user) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = user.username;
+      button.addEventListener("click", () => addShareEditor(user));
+      shareUserSuggestions.append(button);
+    });
+    shareUserSuggestions.hidden = users.length === 0;
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      shareUserSuggestions.hidden = true;
+    }
+  }
+}
+
+function populateSharePanel(share) {
+  isPopulatingSharePanel = true;
+  currentShare = share || null;
+  setShareAccessMode(currentShare?.accessMode || "view", { showActive: Boolean(currentShare) });
+  shareEditors = currentShare?.editors ? [...currentShare.editors] : [];
+  renderShareEditors();
+  updateShareButtonState();
+  isPopulatingSharePanel = false;
+}
+
+async function loadCurrentShare() {
+  if (!shareToggle || isShareMode) {
+    return;
+  }
+  try {
+    const response = await fetch(`/api/shares/current?path=${encodeURIComponent(currentPath)}`);
+    const data = await responseJson(response);
+    if (!response.ok) {
+      return;
+    }
+    populateSharePanel(data.share);
+  } catch {
+    updateShareButtonState();
+  }
+}
+
+shareAccessButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const selectedMode = button.dataset.accessMode;
+    if (currentShare && shareAccessMode === selectedMode) {
+      removeCurrentShare();
+      return;
+    }
+    window.clearTimeout(shareSaveTimer);
+    shareSaveTimer = undefined;
+    setShareAccessMode(selectedMode);
+    saveShareSettings();
+  });
+});
+
+if (shareEditorsInput) {
+  shareEditorsInput.addEventListener("input", () => loadShareSuggestions(shareEditorsInput.value));
+  shareEditorsInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const firstSuggestion = shareUserSuggestions.querySelector("button");
+      if (firstSuggestion) {
+        firstSuggestion.click();
+      }
+    } else if (event.key === "Backspace" && !shareEditorsInput.value && shareEditors.length) {
+      shareEditors.pop();
+      renderShareEditors();
+      scheduleShareSave();
+    }
+  });
+}
+
+async function saveShareSettings(options = {}) {
+  const path = options.path ?? currentPath;
+  const token = options.token ?? currentShare?.token;
+  const wasExistingShare = Boolean(token);
+  if (wasExistingShare && currentShare?.token !== token) {
+    return;
+  }
+  try {
+    const body = JSON.stringify({
+      path,
+      accessMode: shareAccessMode,
+      editors: shareEditors.map((editor) => editor.username),
+    });
+    const response = await fetch(wasExistingShare ? `/api/shares/${encodeURIComponent(token)}` : "/api/shares", {
+      method: wasExistingShare ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+    const data = await responseJson(response);
+    if (!response.ok) {
+      status.textContent = data.message || "Could not save share settings.";
+      return;
+    }
+    if (path === currentPath) {
+      populateSharePanel(data);
+    } else {
+      loadCurrentShare();
+    }
+    status.textContent = wasExistingShare ? "Share settings saved." : "Share link created.";
+  } catch {
+    status.textContent = "Could not save share settings.";
+  }
+}
+
+async function removeCurrentShare() {
+  if (!currentShare) {
+    return;
+  }
+  window.clearTimeout(shareSaveTimer);
+  shareSaveTimer = undefined;
+  const token = currentShare.token;
+  try {
+    const response = await fetch(`/api/shares/${encodeURIComponent(token)}`, { method: "DELETE" });
+    if (!response.ok) {
+      const data = await responseJson(response);
+      status.textContent = data.message || "Could not remove share link.";
+      return;
+    }
+    populateSharePanel(null);
+    status.textContent = "Share link removed.";
+  } catch {
+    status.textContent = "Could not remove share link.";
+  }
+}
+
 deleteSelectedButton.addEventListener("click", () => {
   deleteSelectedItems();
 });
@@ -285,7 +756,7 @@ toggleUploadPanelButton.addEventListener("click", () => {
 function updateBreadcrumbs() {
   breadcrumbs.innerHTML = "";
   const segments = currentPath ? currentPath.split("/") : [];
-  const crumbs = [{ label: "Root", path: "" }];
+  const crumbs = [{ label: rootLabel, path: "" }];
 
   segments.forEach((segment, index) => {
     crumbs.push({ label: segment, path: segments.slice(0, index + 1).join("/") });
@@ -323,11 +794,29 @@ function updateBreadcrumbs() {
 }
 
 function folderUrl(path) {
+  if (isShareMode) {
+    const base = `/s/${encodeURIComponent(shareContext.token)}`;
+    if (!path) {
+      return base;
+    }
+    return `${base}/browse/${path.split("/").map(encodeURIComponent).join("/")}`;
+  }
   if (!path) {
     return "/";
   }
 
   return `/browse/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function apiBase(path) {
+  if (!isShareMode) {
+    return `/api${path}`;
+  }
+  return `/api/shares/${encodeURIComponent(shareContext.token)}${path}`;
+}
+
+function encodedPath(path) {
+  return path.split("/").map(encodeURIComponent).join("/");
 }
 
 function navigateToFolder(path) {
@@ -336,6 +825,7 @@ function navigateToFolder(path) {
   }
   currentPath = path;
   window.history.pushState({ path }, "", folderUrl(path));
+  loadCurrentShare();
   loadItems();
 }
 
@@ -350,10 +840,12 @@ function showContextMenu(item, x, y) {
   const actions = [];
   const selectedCount = selectedItems.size;
 
-  if (selectedCount) {
-    actions.push({ label: `New folder (${selectedCount})`, action: (button) => { openFolderPopover(button, true); } });
-  } else {
-    actions.push({ label: "New folder", action: (button) => { openFolderPopover(button, false); } });
+  if (canEdit) {
+    if (selectedCount) {
+      actions.push({ label: `New folder (${selectedCount})`, action: (button) => { openFolderPopover(button, true); } });
+    } else {
+      actions.push({ label: "New folder", action: (button) => { openFolderPopover(button, false); } });
+    }
   }
 
   if (item?.type === "folder") {
@@ -363,14 +855,18 @@ function showContextMenu(item, x, y) {
       label: "Download",
       action: () => {
         showToast(`Download started for ${item.name}.`);
-        window.location.assign(`/api/files/${item.path.split("/").map(encodeURIComponent).join("/")}`);
+        window.location.assign(fileUrl(item.path));
       },
     });
   }
 
-  if (item) {
+  if (item && canEdit) {
     actions.push({ label: "Rename", action: (button) => { openRenamePopover(button, item); } });
     actions.push({ label: "Delete", action: () => { deleteItem(item); }, className: "delete" });
+  }
+
+  if (!actions.length) {
+    return;
   }
 
   actions.forEach((action) => {
@@ -442,6 +938,9 @@ function rowSelectionMode(path, index, event, options = {}) {
       selectedItems.delete(path);
     }
     lastSelectedPath = path;
+  } else if (selectedItems.has(path)) {
+    selectedItems.delete(path);
+    lastSelectedPath = selectedItems.size ? Array.from(selectedItems).at(-1) : null;
   } else {
     selectedItems = new Set([path]);
     lastSelectedPath = path;
@@ -452,7 +951,7 @@ function rowSelectionMode(path, index, event, options = {}) {
 
 function itemRequestUrl(path) {
   const query = path ? `?path=${encodeURIComponent(path)}` : "";
-  return `/api/items${query}`;
+  return `${apiBase("/items")}${query}`;
 }
 
 async function fetchItems(path, options = {}) {
@@ -468,7 +967,7 @@ async function fetchItems(path, options = {}) {
 
   const request = fetch(itemRequestUrl(path))
     .then(async (response) => {
-      const data = await response.json();
+      const data = await responseJson(response);
 
       if (!response.ok) {
         throw new Error(data.message || "Could not load items.");
@@ -621,8 +1120,12 @@ function renderItems(data) {
     row.dataset.index = String(index);
     row.dataset.type = item.type;
     row.classList.toggle("is-pending-upload", Boolean(item.pendingUpload));
-    row.draggable = !item.pendingUpload;
+    row.draggable = canEdit && !item.pendingUpload;
     row.addEventListener("dragstart", (event) => {
+      if (!canEdit) {
+        event.preventDefault();
+        return;
+      }
       if (!selectedItems.has(item.path)) {
         setSelectedItems(new Set([item.path]), item.path);
       }
@@ -632,7 +1135,8 @@ function renderItems(data) {
 
     checkbox.type = "checkbox";
     checkbox.className = "select-file-checkbox";
-    checkbox.disabled = Boolean(item.pendingUpload);
+    checkbox.disabled = !canEdit || Boolean(item.pendingUpload);
+    checkbox.hidden = !canEdit;
     checkbox.setAttribute("aria-label", `Select ${item.name}`);
     checkbox.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -692,7 +1196,7 @@ function renderItems(data) {
     } else if (!item.pendingUpload) {
       const downloadLink = document.createElement("a");
       downloadLink.className = "item-action-link";
-      downloadLink.href = `/api/files/${item.path.split("/").map(encodeURIComponent).join("/")}`;
+      downloadLink.href = fileUrl(item.path);
       downloadLink.textContent = "Download";
       downloadLink.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -701,20 +1205,22 @@ function renderItems(data) {
       actions.append(downloadLink);
     }
 
-    const removeButton = document.createElement("button");
-    removeButton.type = "button";
-    removeButton.className = "item-action-button delete";
-    removeButton.textContent = "×";
-    removeButton.setAttribute("aria-label", `${item.pendingUpload ? "Cancel upload" : "Delete"} ${item.name}`);
-    removeButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (item.pendingUpload) {
-        cancelPendingUploadPath(item.path);
-      } else {
-        deleteItem(item);
-      }
-    });
-    actions.append(removeButton);
+    if (canEdit) {
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "item-action-button delete";
+      removeButton.textContent = "×";
+      removeButton.setAttribute("aria-label", `${item.pendingUpload ? "Cancel upload" : "Delete"} ${item.name}`);
+      removeButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (item.pendingUpload) {
+          cancelPendingUploadPath(item.path);
+        } else {
+          deleteItem(item);
+        }
+      });
+      actions.append(removeButton);
+    }
 
     row.addEventListener("click", (event) => {
       if (event.target.closest(".item-action-button, .item-action-link")) {
@@ -757,7 +1263,7 @@ function renderItems(data) {
         navigateToFolder(item.path);
       } else {
         showToast(`Download started for ${item.name}.`);
-        window.location.assign(`/api/files/${item.path.split("/").map(encodeURIComponent).join("/")}`);
+        window.location.assign(fileUrl(item.path));
       }
     });
 
@@ -773,7 +1279,7 @@ function renderItems(data) {
       showContextMenu(item, event.clientX, event.clientY);
     });
 
-    if (!item.pendingUpload) {
+    if (canEdit && !item.pendingUpload) {
       addRowDropTarget(row, item);
     }
     row.append(checkbox, preview, label, actions);
@@ -862,7 +1368,11 @@ function sortDetail(item) {
 }
 
 function previewUrl(path) {
-  return `/api/previews/${path.split("/").map(encodeURIComponent).join("/")}`;
+  return `${apiBase("/previews")}/${encodedPath(path)}`;
+}
+
+function fileUrl(path) {
+  return `${apiBase("/files")}/${encodedPath(path)}`;
 }
 
 function showFilePreviewFallback(preview) {
@@ -879,13 +1389,13 @@ async function saveVisibleOrder() {
   const cachedItems = itemCache.get(currentPath)?.items || [];
   const itemsByPath = new Map(cachedItems.map((item) => [item.path, item]));
   try {
-    const response = await fetch("/api/items/order", {
+    const response = await fetch(apiBase("/items/order"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: currentPath, paths }),
     });
     if (!response.ok) {
-      const data = await response.json();
+      const data = await responseJson(response);
       status.textContent = data.message || "Could not save item order.";
       await loadItems({ force: true });
       return;
@@ -1049,6 +1559,14 @@ function visibleItemPaths() {
   return Array.from(list.querySelectorAll("li.file-row:not(.is-pending-upload)")).map((row) => row.dataset.path);
 }
 
+function visibleItemNames() {
+  return new Set(
+    Array.from(list.querySelectorAll("li.file-row:not(.is-pending-upload) .item-name"))
+      .map((element) => element.textContent)
+      .filter(Boolean)
+  );
+}
+
 function updateSelectionControls() {
   syncItemSelectionView();
   selectionCount.textContent = `${selectedItems.size} selected`;
@@ -1132,7 +1650,7 @@ async function createFolder(folderName) {
   }
 
   try {
-    const response = await fetch("/api/folders", {
+    const response = await fetch(apiBase("/folders"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1140,7 +1658,7 @@ async function createFolder(folderName) {
       body: JSON.stringify({ name: trimmedName, path: currentPath }),
     });
 
-    const data = await response.json();
+    const data = await responseJson(response);
 
     if (!response.ok) {
       status.textContent = data.message || "Could not create folder.";
@@ -1164,7 +1682,7 @@ async function createFolderFromSelection(folderName) {
     return;
   }
   try {
-    const response = await fetch("/api/folders/from-selection", {
+    const response = await fetch(apiBase("/folders/from-selection"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1176,7 +1694,7 @@ async function createFolderFromSelection(folderName) {
         replace: conflictSelect.value === "replace",
       }),
     });
-    const data = await response.json();
+    const data = await responseJson(response);
     if (!response.ok) {
       status.textContent = data.message || "Could not create folder.";
       return;
@@ -1212,12 +1730,12 @@ renamePopover.addEventListener("submit", async (event) => {
     return;
   }
   try {
-    const response = await fetch("/api/items", {
+    const response = await fetch(apiBase("/items"), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: renameItemPath, name }),
     });
-    const data = await response.json();
+    const data = await responseJson(response);
     if (!response.ok) {
       status.textContent = data.message || "Could not rename item.";
       return;
@@ -1234,7 +1752,7 @@ renamePopover.addEventListener("submit", async (event) => {
 renamePopoverCancel.addEventListener("click", closeRenamePopover);
 
 async function deleteItemRequest(path) {
-  const response = await fetch(`/api/items?path=${encodeURIComponent(path)}`, {
+  const response = await fetch(`${apiBase("/items")}?path=${encodeURIComponent(path)}`, {
     method: "DELETE",
   });
 
@@ -1242,7 +1760,7 @@ async function deleteItemRequest(path) {
     let data = {};
 
     try {
-      data = await response.json();
+      data = await responseJson(response);
     } catch {
       data = {};
     }
@@ -1318,6 +1836,47 @@ function joinUploadPath(...parts) {
     .flatMap((part) => (part || "").replaceAll("\\", "/").split("/"))
     .filter(Boolean)
     .join("/");
+}
+
+function availableUploadFolderName(name, usedNames) {
+  if (!usedNames.has(name)) {
+    usedNames.add(name);
+    return name;
+  }
+  let counter = 1;
+  while (usedNames.has(`${name}_${counter}`)) {
+    counter += 1;
+  }
+  const nextName = `${name}_${counter}`;
+  usedNames.add(nextName);
+  return nextName;
+}
+
+function uniquedFolderSelection(selection) {
+  if (!selection.directories.length && !selection.entries.some((entry) => entry.parentPath)) {
+    return selection;
+  }
+  const usedNames = visibleItemNames();
+  const rootNames = new Map();
+  const renameRoot = (path) => {
+    const parts = path.split("/").filter(Boolean);
+    if (!parts.length) {
+      return path;
+    }
+    if (!rootNames.has(parts[0])) {
+      rootNames.set(parts[0], availableUploadFolderName(parts[0], usedNames));
+    }
+    parts[0] = rootNames.get(parts[0]);
+    return parts.join("/");
+  };
+  return {
+    directories: selection.directories.map(renameRoot),
+    entries: selection.entries.map((entry) => ({
+      ...entry,
+      parentPath: renameRoot(entry.parentPath),
+      displayName: renameRoot(entry.displayName),
+    })),
+  };
 }
 
 function addPendingUploadTree(selection, targetPath, run) {
@@ -1482,25 +2041,15 @@ async function createUploadDirectories(directories, targetPath) {
   if (!directories.length) {
     return;
   }
-  const response = await fetch("/api/folders/tree", {
+  const response = await fetch(apiBase("/folders/tree"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path: targetPath, directories }),
   });
   if (!response.ok) {
-    const data = await response.json();
+    const data = await responseJson(response);
     throw new Error(data.message || "Could not create uploaded folders.");
   }
-}
-
-function ensureUploadDirectory(entry, targetPath, run) {
-  if (!entry.parentPath) {
-    return Promise.resolve();
-  }
-  if (!run.directoryRequests.has(entry.parentPath)) {
-    run.directoryRequests.set(entry.parentPath, createUploadDirectories([entry.parentPath], targetPath));
-  }
-  return run.directoryRequests.get(entry.parentPath);
 }
 
 function emptyUploadDirectories(selection) {
@@ -1511,7 +2060,8 @@ function emptyUploadDirectories(selection) {
 
 async function startDroppedUploads(selection, targetPath) {
   try {
-    await startUploads(await selection, targetPath);
+    const resolvedSelection = await selection;
+    await startUploads(uniquedFolderSelection(resolvedSelection), targetPath);
   } catch {
     status.textContent = "Could not read the dropped folder.";
   }
@@ -1566,11 +2116,23 @@ function uploadFile(entry, targetPath, run, onProgress) {
 
     request.addEventListener("load", () => {
       let data = {};
+      const responseText = request.responseText || "";
 
       try {
-        data = JSON.parse(request.responseText);
+        data = JSON.parse(responseText);
       } catch {
-        data = {};
+        const isHtml = responseText.trimStart().startsWith("<");
+        data = {
+          htmlResponse: isHtml,
+          message: isHtml
+            ? "The upload endpoint returned a page instead of data. Sign in again and retry the upload."
+            : "",
+        };
+      }
+
+      if (data.htmlResponse) {
+        finish({ ok: false, message: data.message, retryable: false });
+        return;
       }
 
       if (request.status >= 200 && request.status < 300) {
@@ -1595,8 +2157,10 @@ function uploadFile(entry, targetPath, run, onProgress) {
       finish({ ok: false, message: "Upload canceled.", retryable: false, canceled: true });
     });
 
-    request.open("POST", "/api/files");
-    request.setRequestHeader("X-CSRF-Token", csrfToken);
+    request.open("POST", apiBase("/files"));
+    if (csrfToken) {
+      request.setRequestHeader("X-CSRF-Token", csrfToken);
+    }
     request.setRequestHeader("X-Upload-ID", entry.uploadId);
     request.send(body);
   });
@@ -1724,7 +2288,6 @@ async function uploadQueue(entries, targetPath, run) {
       let result;
       let retries = 0;
       while (true) {
-        await ensureUploadDirectory(row.entry, targetPath, run);
         if (row.entry.canceled || run.stopped) {
           result = { ok: false, canceled: true };
           break;
@@ -1843,8 +2406,8 @@ async function startUploads(selection, targetPath = currentPath) {
   overallPercent.textContent = "0%";
 
   try {
-    await createUploadDirectories(emptyUploadDirectories(normalizedSelection), targetPath);
     if (!entries.length) {
+      await createUploadDirectories(directories, targetPath);
       cleanupPendingFolders(run);
       renderCurrentFolder();
       status.textContent = `Uploaded ${directories.length} empty folder${directories.length === 1 ? "" : "s"}.`;
@@ -1854,6 +2417,9 @@ async function startUploads(selection, targetPath = currentPath) {
       await loadItems({ force: true });
       return;
     }
+    createUploadDirectories(emptyUploadDirectories(normalizedSelection), targetPath).catch((error) => {
+      showToast(error.message || "Some empty folders could not be created.");
+    });
     const result = await uploadQueue(entries, targetPath, run);
 
     if (run.stopped) {
@@ -1920,14 +2486,14 @@ function hasDraggedItems(event) {
 
 async function moveItems(paths, targetPath) {
   try {
-    const response = await fetch("/api/items/move", {
+    const response = await fetch(apiBase("/items/move"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ paths, destination: targetPath, replace: conflictSelect.value === "replace" }),
     });
-    const data = await response.json();
+    const data = await responseJson(response);
     if (!response.ok) {
       status.textContent = data.message || "Could not move items.";
       return;
@@ -2012,10 +2578,12 @@ input.addEventListener("change", () => {
 });
 
 folderInput.addEventListener("change", () => {
-  startUploads(uploadSelectionFromFiles(folderInput.files));
+  startUploads(uniquedFolderSelection(uploadSelectionFromFiles(folderInput.files)));
 });
 
-addFolderDropTarget(list, () => currentPath);
+if (canEdit) {
+  addFolderDropTarget(list, () => currentPath);
+}
 
 let autoScrollFrame;
 let autoScrollSpeed = 0;
@@ -2057,7 +2625,7 @@ document.addEventListener("dragover", updateAutoScroll);
 document.addEventListener("drop", stopAutoScroll);
 document.addEventListener("dragend", stopAutoScroll);
 document.addEventListener("contextmenu", (event) => {
-  if (event.target.closest("button, a, input, select, textarea, label, form, .settings-panel, .account-panel, .upload-panel, .context-menu, .folder-popover, .rename-popover, li.file-row")) {
+  if (event.target.closest("button, a, input, select, textarea, label, form, .settings-panel, .account-panel, .notifications-panel, .share-panel, .upload-panel, .context-menu, .folder-popover, .rename-popover, li.file-row")) {
     return;
   }
   event.preventDefault();
@@ -2067,6 +2635,7 @@ document.addEventListener("contextmenu", (event) => {
 window.history.replaceState({ path: currentPath }, "", folderUrl(currentPath));
 window.addEventListener("popstate", (event) => {
   currentPath = event.state?.path || "";
+  loadCurrentShare();
   loadItems();
 });
 
@@ -2083,7 +2652,13 @@ document.addEventListener("click", (event) => {
   if (!settingsPanel.hidden && !settingsPanel.contains(event.target) && !settingsToggle.contains(event.target)) {
     closeSettingsPanel();
   }
-  if (!accountPanel.hidden && !accountPanel.contains(event.target) && !accountToggle.contains(event.target)) {
+  if (notificationsPanel && !notificationsPanel.hidden && !notificationsPanel.contains(event.target) && !notificationsToggle.contains(event.target)) {
+    closeNotificationsPanel();
+  }
+  if (sharePanel && !sharePanel.hidden && !sharePanel.contains(event.target) && !shareToggle.contains(event.target)) {
+    closeSharePanel();
+  }
+  if (accountPanel && !accountPanel.hidden && !accountPanel.contains(event.target) && !accountToggle.contains(event.target)) {
     closeAccountPanel();
   }
   if (!contextMenu.hidden && !contextMenu.contains(event.target)) {
@@ -2110,9 +2685,12 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeUploadChoiceMenu();
     hideContextMenu();
+    closeNotificationsPanel();
     closeFolderPopover();
     closeRenamePopover();
   }
 });
 
+loadNotifications();
+loadCurrentShare();
 loadItems();
