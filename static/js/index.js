@@ -1282,20 +1282,31 @@ function renderDeletePreview(paths, folderPath = currentPath) {
   return true;
 }
 
-async function refreshFolderFromServer(folderPath) {
-  try {
-    const data = await fetchItems(folderPath, { force: true });
-    if (folderPath !== currentPath) {
-      return;
-    }
-    list.innerHTML = "";
-    list.className = "";
-    renderItems(data);
-  } catch (error) {
-    logClientError("Could not refresh folder after delete", error, {
-      folderPath,
+function removeDeletedItemsFromView(paths, folderPath = currentPath) {
+  const deletedPaths = [...new Set(paths.filter(Boolean))];
+  const data = itemCache.get(folderPath);
+  if (data) {
+    itemCache.set(folderPath, {
+      ...data,
+      items: data.items.filter((item) => !deletedPaths.some((path) => itemMatchesDeletedPath(item.path, path))),
     });
   }
+  deletedPaths.forEach((path) => {
+    list.querySelectorAll("li.file-row").forEach((row) => {
+      if (itemMatchesDeletedPath(row.dataset.path || "", path)) {
+        row.remove();
+      }
+    });
+  });
+  selectedItems = new Set(Array.from(selectedItems).filter((path) => !deletedPaths.some((deletedPath) => itemMatchesDeletedPath(path, deletedPath))));
+  if (!list.querySelector("li.file-row")) {
+    list.innerHTML = "";
+    list.className = "";
+    showEmptyFileList();
+  } else {
+    updateRowIndexes();
+  }
+  updateSelectionControls();
 }
 
 function pendingChildren(path) {
@@ -1321,6 +1332,166 @@ function renderCurrentFolder() {
   list.innerHTML = "";
   list.className = "";
   renderItems(data);
+}
+
+function upsertCachedItem(folderPath, item, previousPath = item.path) {
+  const data = itemCache.get(folderPath) || { items: [], path: folderPath, parent: uploadParentPath(folderPath) };
+  const items = data.items.filter((candidate) => candidate.path !== item.path && candidate.path !== previousPath);
+  items.push(item);
+  itemCache.set(folderPath, { ...data, items });
+}
+
+function replacePendingUploadRow(entry, item) {
+  const row = list.querySelector(`li[data-path="${CSS.escape(entry.fullPath)}"]`);
+  if (!row || item.type !== "file") {
+    return false;
+  }
+  const index = Number(row.dataset.index) || 0;
+  const nextRow = document.createElement("li");
+  const checkbox = document.createElement("input");
+  const preview = document.createElement("div");
+  const label = document.createElement("div");
+  const name = document.createElement("span");
+  const actions = document.createElement("div");
+  const downloadLink = document.createElement("a");
+  const removeButton = document.createElement("button");
+
+  nextRow.className = "file-row upload-complete-swap";
+  nextRow.dataset.path = item.path;
+  nextRow.dataset.index = String(index);
+  nextRow.dataset.type = item.type;
+  nextRow.draggable = canEdit;
+  nextRow.addEventListener("dragstart", (event) => {
+    if (!canEdit) {
+      event.preventDefault();
+      return;
+    }
+    if (!selectedItems.has(item.path)) {
+      setSelectedItems(new Set([item.path]), item.path);
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(config.draggedItemsType, JSON.stringify(Array.from(selectedItems)));
+  });
+
+  checkbox.type = "checkbox";
+  checkbox.className = "select-file-checkbox";
+  checkbox.disabled = !canEdit;
+  checkbox.hidden = !canEdit;
+  checkbox.setAttribute("aria-label", `Select ${item.name}`);
+  checkbox.addEventListener("click", (event) => {
+    event.stopPropagation();
+    rowSelectionMode(item.path, index, event, { checkbox: true, checked: checkbox.checked });
+  });
+
+  preview.className = "item-preview";
+  if (item.preview === "image") {
+    const image = document.createElement("img");
+    image.loading = "lazy";
+    image.alt = "";
+    image.src = previewUrl(item.path);
+    image.addEventListener("error", () => showFilePreviewFallback(preview));
+    preview.append(image);
+  } else if (item.preview === "video") {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.src = previewUrl(item.path);
+    video.addEventListener("error", () => showFilePreviewFallback(preview));
+    preview.append(video);
+  } else {
+    preview.classList.add("file");
+    preview.textContent = "·";
+  }
+
+  name.className = "item-name";
+  name.textContent = item.name;
+  label.className = "item-label";
+  label.append(name);
+  const detailText = sortDetail(item);
+  if (detailText) {
+    const detail = document.createElement("span");
+    detail.className = "item-sort-detail";
+    detail.textContent = detailText;
+    label.append(detail);
+  }
+
+  actions.className = "item-actions";
+  downloadLink.className = "item-action-link";
+  downloadLink.href = fileUrl(item.path);
+  downloadLink.textContent = "Download";
+  downloadLink.addEventListener("click", (event) => {
+    event.stopPropagation();
+    showToast(`Download started for ${item.name}.`);
+  });
+  actions.append(downloadLink);
+
+  if (canEdit) {
+    removeButton.type = "button";
+    removeButton.className = "item-action-button delete";
+    removeButton.textContent = "×";
+    removeButton.setAttribute("aria-label", `Delete ${item.name}`);
+    removeButton.addEventListener("mouseenter", () => prepareDeletePreview([item.path]));
+    removeButton.addEventListener("focus", () => prepareDeletePreview([item.path]));
+    removeButton.addEventListener("pointerdown", () => prepareDeletePreview([item.path]));
+    removeButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteItem(item, removeButton);
+    });
+    actions.append(removeButton);
+  }
+
+  nextRow.addEventListener("click", (event) => {
+    if (event.target.closest(".item-action-button, .item-action-link")) {
+      return;
+    }
+    rowSelectionMode(item.path, index, event);
+  });
+  nextRow.addEventListener("dblclick", (event) => {
+    if (event.target.closest(".item-action-button, .item-action-link, .select-file-checkbox")) {
+      return;
+    }
+    showToast(`Download started for ${item.name}.`);
+    window.location.assign(fileUrl(item.path));
+  });
+  nextRow.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!selectedItems.has(item.path)) {
+      setSelectedItems(new Set([item.path]), item.path);
+    }
+    showContextMenu(item, event.clientX, event.clientY);
+  });
+  if (canEdit) {
+    addRowDropTarget(nextRow, item);
+  }
+
+  nextRow.append(checkbox, preview, label, actions);
+  row.replaceWith(nextRow);
+  window.requestAnimationFrame(() => nextRow.classList.remove("upload-complete-swap"));
+  updateRowIndexes();
+  updateSelectionControls();
+  return true;
+}
+
+function completePendingUpload(entry, item, run) {
+  const previousPath = entry.fullPath;
+  pendingUploadItems.delete(previousPath);
+  if (item?.path) {
+    pendingUploadItems.delete(item.path);
+    upsertCachedItem(uploadParentPath(item.path), item, previousPath);
+  }
+  const cleanedFolderPaths = cleanupPendingFolders(run);
+  cleanedFolderPaths.forEach((path) => {
+    list.querySelector(`li[data-path="${CSS.escape(path)}"]`)?.remove();
+  });
+  if (cleanedFolderPaths.length) {
+    updateRowIndexes();
+  }
+  if (currentPath === uploadParentPath(item?.path || previousPath) || currentPath === uploadParentPath(previousPath)) {
+    if (!replacePendingUploadRow(entry, item)) {
+      renderCurrentFolder();
+    }
+  }
 }
 
 function renderItems(data) {
@@ -2069,15 +2240,9 @@ async function deleteItem(item, anchor) {
     return;
   }
 
-  if (!renderDeletePreview([deletedPath], folderPath)) {
-    invalidateFolder(folderPath);
-    selectedItems.delete(deletedPath);
-    updateSelectionControls();
-  }
+  removeDeletedItemsFromView([deletedPath], folderPath);
   invalidateFolder(deletedPath);
-  updateSelectionControls();
   status.textContent = `Deleted ${item.name}.`;
-  refreshFolderFromServer(folderPath);
 }
 
 async function deleteSelectedItems(anchor) {
@@ -2113,10 +2278,8 @@ async function deleteSelectedItems(anchor) {
     }
   }
 
-  if (deletedPaths.length && !renderDeletePreview(deletedPaths, folderPath)) {
-    invalidateFolder(folderPath);
-    selectedItems = new Set(Array.from(selectedItems).filter((path) => !deletedPaths.some((deletedPath) => itemMatchesDeletedPath(path, deletedPath))));
-    updateSelectionControls();
+  if (deletedPaths.length) {
+    removeDeletedItemsFromView(deletedPaths, folderPath);
   }
   status.textContent = failed
     ? `Deleted ${deleted} item${deleted === 1 ? "" : "s"}; ${failed} failed.`
@@ -2124,9 +2287,6 @@ async function deleteSelectedItems(anchor) {
 
   deleteSelectedButton.textContent = "Delete selected";
   updateSelectionControls();
-  if (deletedPaths.length) {
-    refreshFolderFromServer(folderPath);
-  }
 }
 
 function joinUploadPath(...parts) {
@@ -2219,6 +2379,7 @@ function removePendingUploadPath(path) {
 
 function cleanupPendingFolders(run) {
   let removedFolder;
+  const removedPaths = [];
   do {
     removedFolder = false;
     const pendingPaths = Array.from(pendingUploadItems.keys());
@@ -2228,10 +2389,12 @@ function cleanupPendingFolders(run) {
       }
       if (!pendingPaths.some((path) => path !== item.path && path.startsWith(`${item.path}/`))) {
         pendingUploadItems.delete(item.path);
+        removedPaths.push(item.path);
         removedFolder = true;
       }
     });
   } while (removedFolder);
+  return removedPaths;
 }
 
 function cancelPendingUploadPath(path) {
@@ -2435,7 +2598,7 @@ function uploadFile(entry, targetPath, run, onProgress) {
 
       if (request.status >= 200 && request.status < 300) {
         onProgress(file.size);
-        finish({ ok: true, filename: data.filename || file.name });
+        finish({ ok: true, filename: data.filename || file.name, item: data.item || null });
         return;
       }
 
@@ -2617,12 +2780,14 @@ async function uploadQueue(entries, targetPath, run) {
 
       if (result.ok) {
         succeeded += 1;
-        removePendingUploadPath(row.entry.fullPath);
-        cleanupPendingFolders(run);
-        invalidateFolder(uploadParentPath(row.entry.fullPath));
-        if (currentPath === uploadParentPath(row.entry.fullPath)) {
-          loadItems({ force: true });
-        }
+        completePendingUpload(row.entry, result.item || {
+          name: result.filename || row.file.name,
+          path: row.entry.fullPath,
+          type: "file",
+          size: row.file.size,
+          modifiedAt: Date.now() / 1000,
+          extension: row.file.name.includes(".") ? row.file.name.split(".").at(-1).toLowerCase() : null,
+        }, run);
         row.state.textContent = "Uploaded";
         row.progress.value = 100;
         window.setTimeout(() => {
@@ -2732,8 +2897,6 @@ async function startUploads(selection, targetPath = currentPath) {
         }, config.uploadedRowVisibleMs);
     }
 
-    invalidateFolder(targetPath);
-    await loadItems({ force: true });
   } catch {
     status.textContent = "Upload failed.";
     if (!uploadList.querySelector(".upload-item")) {
@@ -2745,7 +2908,6 @@ async function startUploads(selection, targetPath = currentPath) {
     }
     cleanupPendingFolders(run);
     updateFailedControls();
-    renderCurrentFolder();
     stopUploadStopwatch();
     input.disabled = false;
     folderInput.disabled = false;

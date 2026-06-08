@@ -1024,6 +1024,11 @@ li.file-row.is-pending-upload:hover {
   background: #f1f5f9;
 }
 
+li.file-row.upload-complete-swap {
+  background: #ecfdf5;
+  transition: background-color 360ms ease;
+}
+
 .item-preview {
   display: grid;
   width: 44px;
@@ -1621,6 +1626,10 @@ html[data-theme="dark"] li.file-row:hover {
 }
 
 html[data-theme="dark"] li.file-row.is-selected {
+    background: #123524;
+}
+
+html[data-theme="dark"] li.file-row.upload-complete-swap {
     background: #123524;
 }
 

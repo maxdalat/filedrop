@@ -1541,7 +1541,8 @@ def upload_file():
             (g.user["user_id"], upload_id),
         ).fetchone()
         if receipt:
-            return jsonify({"filename": Path(receipt["path"]).name, "path": receipt["path"]}), 200
+            path = accessible_root() / receipt["path"]
+            return jsonify({"filename": path.name, "path": receipt["path"], "item": item_payload(path)}), 200
     filename = parse_upload_file(request.files.get("file"))
     folder = resolve_upload_path(request.form.get("path", ""))
     if folder.exists() and not folder.is_dir():
@@ -1560,7 +1561,7 @@ def upload_file():
             (g.user["user_id"], upload_id, saved_path, iso_time(utc_now())),
         )
         db.commit()
-    return jsonify({"filename": saved_filename, "path": saved_path}), 201
+    return jsonify({"filename": saved_filename, "path": saved_path, "item": item_payload(destination)}), 201
 
 
 @app.post("/api/shares/<token>/files")
@@ -1582,7 +1583,7 @@ def upload_shared_file(token):
         abort(409, description="A folder with that name already exists.")
     request.files["file"].save(destination)
     saved_path = destination.relative_to(root).as_posix()
-    return jsonify({"filename": saved_filename, "path": saved_path}), 201
+    return jsonify({"filename": saved_filename, "path": saved_path, "item": share_item_payload(destination, root)}), 201
 
 
 @app.get("/api/files/<path:filename>")
