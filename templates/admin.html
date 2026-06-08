@@ -17,7 +17,7 @@
         <p class="notice">Temporary password for <strong>{{ reset_username }}</strong>: <code>{{ temporary_password }}</code><br>Share it securely. It is only displayed once.</p>
       {% endif %}
       <table>
-        <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Storage</th><th>Actions</th></tr></thead>
         <tbody>
           {% for item in users %}
             <tr>
@@ -25,6 +25,17 @@
               <td>{{ item.email }}</td>
               <td>{{ item.role }}</td>
               <td>{{ item.status }}</td>
+              <td>
+                <div class="storage-cell">
+                  <span>{{ item.storage_used_label }} / {{ item.storage_limit_label }}</span>
+                  <form class="storage-form" method="post" action="{{ url_for('update_user_storage_limit', user_id=item.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="number" name="storage_limit_gb" min="0.01" step="0.01" value="{{ item.storage_limit_gb }}" aria-label="Storage limit for {{ item.username }} in GB">
+                    <span>GB</span>
+                    <button class="storage-save">Save</button>
+                  </form>
+                </div>
+              </td>
               <td class="actions">
                 {% if item.status != "approved" %}
                   <form method="post" action="{{ url_for('approve_user', user_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Approve</button></form>

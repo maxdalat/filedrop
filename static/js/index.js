@@ -109,6 +109,9 @@ const uploadElapsed = document.querySelector("#upload-elapsed");
 const toggleUploadPanelButton = document.querySelector("#toggle-upload-panel-button");
 const uploadPanelActions = document.querySelector("#upload-panel-actions");
 const toastContainer = document.querySelector("#toast-container");
+const storageMeter = document.querySelector("#storage-meter");
+const storageMeterLabel = document.querySelector("#storage-meter-label");
+const storageMeterFill = document.querySelector("#storage-meter-fill");
 const stopUploadsButton = document.querySelector("#stop-uploads-button");
 const clearFailedButton = document.querySelector("#clear-failed-button");
 const uploadList = document.querySelector("#upload-list");
@@ -119,6 +122,10 @@ const overallPercent = document.querySelector("#overall-percent");
 const overallProgress = document.querySelector("#overall-progress");
 const settingsToggle = document.querySelector("#settings-toggle");
 const settingsPanel = document.querySelector("#settings-panel");
+const searchToggle = document.querySelector("#search-toggle");
+const searchPanel = document.querySelector("#search-panel");
+const searchInput = document.querySelector("#search-input");
+const searchResults = document.querySelector("#search-results");
 const parallelSlider = document.querySelector("#parallel-uploads");
 const parallelValue = document.querySelector("#parallel-value");
 const confirmSingleDelete = document.querySelector("#confirm-single-delete");
@@ -160,6 +167,8 @@ const renamePopover = document.querySelector("#rename-popover");
 const renameInput = document.querySelector("#rename-input");
 const renamePopoverCancel = document.querySelector("#rename-popover-cancel");
 let renameItemPath;
+let storageUsage = window.FILEDROP_STORAGE || null;
+let storageRefreshTimer;
 
 const accountPreferences = window.FILEDROP_PREFERENCES || {};
 const savedParallelUploads = Number.parseInt(accountPreferences.parallelUploads, 10);
@@ -188,6 +197,8 @@ const prefetchedFolderPages = new Set();
 const pendingUploadItems = new Map();
 let activeUploadRun;
 let currentShare;
+let searchAbort;
+let searchTimer;
 let shareAccessMode = "view";
 let shareEditors = [];
 let shareSuggestionAbort;
@@ -223,8 +234,51 @@ chooseFolderButton.addEventListener("click", () => {
 });
 
 function updateToastPosition() {
-  const bottom = uploadPanel.classList.contains("is-visible") ? uploadPanel.offsetHeight + 28 : 16;
+  const panelOffset = uploadPanel.classList.contains("is-visible") ? uploadPanel.offsetHeight + 12 : 0;
+  if (storageMeter) {
+    storageMeter.style.bottom = `${16 + panelOffset}px`;
+  }
+  const storageOffset = storageMeter ? storageMeter.offsetHeight + 12 : 0;
+  const bottom = 16 + storageOffset + panelOffset;
   toastContainer.style.bottom = `${bottom}px`;
+}
+
+function renderStorageUsage(data = storageUsage) {
+  if (!storageMeter || !storageMeterLabel || !storageMeterFill || !data) {
+    return;
+  }
+  storageUsage = data;
+  const used = formatBytes(data.usedBytes || 0);
+  const limit = formatBytes(data.limitBytes || 0);
+  const percent = Math.min(100, Math.max(0, Number(data.percent || 0)));
+  storageMeterLabel.textContent = `${used} / ${limit}`;
+  storageMeterFill.style.width = `${percent}%`;
+  storageMeterFill.classList.toggle("is-warning", percent >= 80 && percent < 100);
+  storageMeterFill.classList.toggle("is-full", percent >= 100);
+  updateToastPosition();
+}
+
+async function refreshStorageUsage() {
+  if (!storageMeter) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/storage");
+    const data = await responseJson(response);
+    if (response.ok) {
+      renderStorageUsage(data);
+    }
+  } catch (error) {
+    logClientError("Could not refresh storage usage", error);
+  }
+}
+
+function scheduleStorageUsageRefresh() {
+  if (!storageMeter) {
+    return;
+  }
+  window.clearTimeout(storageRefreshTimer);
+  storageRefreshTimer = window.setTimeout(refreshStorageUsage, 500);
 }
 
 function showToast(message) {
@@ -312,9 +366,11 @@ fullView.checked = accountPreferences.fullView === true;
 updateSortButtons();
 document.body.classList.toggle("full-view", fullView.checked);
 window.FILEDROP_THEME.apply(themeSelect.value);
+renderStorageUsage();
 
 settingsToggle.addEventListener("click", () => {
   const isOpen = settingsPanel.hidden;
+  closeSearchPanel();
   closeAccountPanel();
   closeSharePanel();
   closeNotificationsPanel();
@@ -322,10 +378,28 @@ settingsToggle.addEventListener("click", () => {
   settingsToggle.setAttribute("aria-expanded", String(isOpen));
 });
 
+if (searchToggle) {
+  searchToggle.addEventListener("click", () => {
+    const isOpen = searchPanel.hidden;
+    closeSettingsPanel();
+    closeAccountPanel();
+    closeSharePanel();
+    closeNotificationsPanel();
+    searchPanel.hidden = !isOpen;
+    searchToggle.setAttribute("aria-expanded", String(isOpen));
+    if (isOpen) {
+      searchInput.focus();
+      searchInput.select();
+      loadSearchResults();
+    }
+  });
+}
+
 if (accountToggle) {
   accountToggle.addEventListener("click", () => {
     const isOpen = accountPanel.hidden;
     closeSettingsPanel();
+    closeSearchPanel();
     closeSharePanel();
     closeNotificationsPanel();
     accountPanel.hidden = !isOpen;
@@ -338,6 +412,7 @@ if (notificationsToggle) {
     const isOpen = notificationsPanel.hidden;
     closeSettingsPanel();
     closeAccountPanel();
+    closeSearchPanel();
     closeSharePanel();
     notificationsPanel.hidden = !isOpen;
     notificationsToggle.setAttribute("aria-expanded", String(isOpen));
@@ -352,6 +427,7 @@ if (shareToggle) {
     const isOpen = sharePanel.hidden;
     closeSettingsPanel();
     closeAccountPanel();
+    closeSearchPanel();
     closeNotificationsPanel();
     sharePanel.hidden = !isOpen;
     shareToggle.setAttribute("aria-expanded", String(isOpen));
@@ -364,6 +440,14 @@ if (shareToggle) {
 function closeSettingsPanel() {
   settingsPanel.hidden = true;
   settingsToggle.setAttribute("aria-expanded", "false");
+}
+
+function closeSearchPanel() {
+  if (!searchPanel || !searchToggle) {
+    return;
+  }
+  searchPanel.hidden = true;
+  searchToggle.setAttribute("aria-expanded", "false");
 }
 
 function closeAccountPanel() {
@@ -477,6 +561,87 @@ function updateSortButtons() {
     button.setAttribute("aria-pressed", String(isActive));
     button.textContent = `${button.dataset.label}${direction ? (sortDirection === "asc" ? " ↑" : " ↓") : ""}`;
     button.setAttribute("aria-label", `${button.dataset.label}${direction}`);
+  });
+}
+
+function renderSearchResults(results, query) {
+  if (!searchResults) {
+    return;
+  }
+  searchResults.innerHTML = "";
+  if (!query.trim()) {
+    const empty = document.createElement("div");
+    empty.className = "search-empty";
+    empty.textContent = "Type to search";
+    searchResults.append(empty);
+    return;
+  }
+  if (!results.length) {
+    const empty = document.createElement("div");
+    empty.className = "search-empty";
+    empty.textContent = "No results";
+    searchResults.append(empty);
+    return;
+  }
+  results.forEach((item) => {
+    const button = document.createElement("button");
+    const name = document.createElement("span");
+    const path = document.createElement("span");
+    button.type = "button";
+    button.className = "search-result";
+    name.className = "search-result-name";
+    path.className = "search-result-path";
+    name.textContent = item.name;
+    path.textContent = item.parent ? item.parent : "Current folder";
+    button.addEventListener("click", () => {
+      closeSearchPanel();
+      navigateToFolder(item.type === "folder" ? item.path : item.parent);
+    });
+    button.append(name, path);
+    searchResults.append(button);
+  });
+}
+
+async function loadSearchResults() {
+  if (!searchInput || !searchResults || isShareMode) {
+    return;
+  }
+  const query = searchInput.value.trim();
+  searchAbort?.abort();
+  if (!query) {
+    renderSearchResults([], query);
+    return;
+  }
+  const controller = new AbortController();
+  searchAbort = controller;
+  try {
+    const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&path=${encodeURIComponent(currentPath)}`, {
+      signal: controller.signal,
+    });
+    const data = await responseJson(response);
+    if (!response.ok) {
+      renderSearchResults([], query);
+      return;
+    }
+    renderSearchResults(data.results || [], query);
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      logClientError("Search failed", error);
+      renderSearchResults([], query);
+    }
+  }
+}
+
+if (searchInput) {
+  searchInput.addEventListener("input", () => {
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(loadSearchResults, 120);
+  });
+  searchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      searchResults.querySelector(".search-result")?.click();
+    }
   });
 }
 
@@ -1978,6 +2143,15 @@ function updateSelectionControls() {
   preloadSelectedFolders();
 }
 
+function clearSelection() {
+  if (!selectedItems.size) {
+    return;
+  }
+  selectedItems = new Set();
+  lastSelectedPath = null;
+  updateSelectionControls();
+}
+
 function showEmptyFileList() {
   const empty = document.createElement("li");
   empty.className = "empty";
@@ -2247,6 +2421,7 @@ async function deleteItem(item, anchor) {
   removeDeletedItemsFromView([deletedPath], folderPath);
   invalidateFolder(deletedPath);
   status.textContent = `Deleted ${item.name}.`;
+  scheduleStorageUsageRefresh();
 }
 
 async function deleteSelectedItems(anchor) {
@@ -2291,6 +2466,9 @@ async function deleteSelectedItems(anchor) {
 
   deleteSelectedButton.textContent = "Delete selected";
   updateSelectionControls();
+  if (deletedPaths.length) {
+    scheduleStorageUsageRefresh();
+  }
 }
 
 function joinUploadPath(...parts) {
@@ -2792,6 +2970,7 @@ async function uploadQueue(entries, targetPath, run) {
           modifiedAt: Date.now() / 1000,
           extension: row.file.name.includes(".") ? row.file.name.split(".").at(-1).toLowerCase() : null,
         }, run);
+        scheduleStorageUsageRefresh();
         row.state.textContent = "Uploaded";
         row.progress.value = 100;
         window.setTimeout(() => {
@@ -3089,7 +3268,7 @@ document.addEventListener("dragover", updateAutoScroll);
 document.addEventListener("drop", stopAutoScroll);
 document.addEventListener("dragend", stopAutoScroll);
 document.addEventListener("contextmenu", (event) => {
-  if (event.target.closest("button, a, input, select, textarea, label, form, .settings-panel, .account-panel, .notifications-panel, .share-panel, .upload-panel, .context-menu, .folder-popover, .rename-popover, li.file-row")) {
+  if (event.target.closest("button, a, input, select, textarea, label, form, .settings-panel, .account-panel, .search-panel, .notifications-panel, .share-panel, .upload-panel, .context-menu, .folder-popover, .rename-popover, li.file-row")) {
     return;
   }
   event.preventDefault();
@@ -3111,11 +3290,20 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 });
 
 document.addEventListener("click", (event) => {
+  const selectionSurface = event.target.closest(
+    "#file-list, #file-toolbar, #context-menu, #delete-confirm-popover, #page-dim, .folder-popover, .rename-popover, .search-panel, .upload-panel"
+  );
+  if (!selectionSurface) {
+    clearSelection();
+  }
   if (!uploadChoiceMenu.hidden && !form.contains(event.target)) {
     closeUploadChoiceMenu();
   }
   if (!settingsPanel.hidden && !settingsPanel.contains(event.target) && !settingsToggle.contains(event.target)) {
     closeSettingsPanel();
+  }
+  if (searchPanel && !searchPanel.hidden && !searchPanel.contains(event.target) && !searchToggle.contains(event.target)) {
+    closeSearchPanel();
   }
   if (notificationsPanel && !notificationsPanel.hidden && !notificationsPanel.contains(event.target) && !notificationsToggle.contains(event.target)) {
     closeNotificationsPanel();
@@ -3154,6 +3342,7 @@ window.addEventListener("keydown", (event) => {
     }
     closeUploadChoiceMenu();
     hideContextMenu();
+    closeSearchPanel();
     closeNotificationsPanel();
     closeFolderPopover();
     closeRenamePopover();

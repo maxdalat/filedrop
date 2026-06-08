@@ -14,6 +14,17 @@
       <div class="site-header-inner">
         <div class="site-brand">Filedrop</div>
         <div class="header-actions">
+          {% if user and not share %}
+          <div class="file-search">
+            <button class="search-toggle" type="button" id="search-toggle" aria-label="Search files" aria-expanded="false" aria-controls="search-panel">
+              <span aria-hidden="true">&#128269;</span>
+            </button>
+            <div class="search-panel" id="search-panel" hidden>
+              <input id="search-input" type="search" autocomplete="off" placeholder="Search files">
+              <div class="search-results" id="search-results"></div>
+            </div>
+          </div>
+          {% endif %}
           {% if user %}
           <div class="notifications">
             <button class="notifications-toggle" type="button" id="notifications-toggle" aria-label="Notifications" aria-expanded="false" aria-controls="notifications-panel">
@@ -131,6 +142,17 @@
         <div class="upload-list" id="upload-list"></div>
       </div>
       <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
+      {% if storage %}
+      <aside class="storage-meter" id="storage-meter" aria-label="Storage usage">
+        <div class="storage-meter-row">
+          <span>Storage</span>
+          <span id="storage-meter-label"></span>
+        </div>
+        <div class="storage-meter-track">
+          <div class="storage-meter-fill" id="storage-meter-fill"></div>
+        </div>
+      </aside>
+      {% endif %}
 
       <p class="status" id="status" hidden></p>
       {% if share %}
@@ -209,6 +231,7 @@
 
     <script>window.FILEDROP_PREFERENCES = {{ preferences|tojson }};</script>
     <script>window.FILEDROP_SHARE_CONTEXT = {{ share|tojson }};</script>
+    <script>window.FILEDROP_STORAGE = {{ storage|tojson }};</script>
     <script src="{{ url_for('static', filename='js/config.js', v=static_asset_version) }}" defer></script>
     <script src="{{ url_for('static', filename='js/index.js', v=static_asset_version) }}" defer></script>
   </body>

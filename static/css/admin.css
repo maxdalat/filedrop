@@ -12,6 +12,10 @@ th { background: #eef2ee; }
 .avatar { display: inline-grid; width: 30px; height: 30px; margin-right: 8px; place-items: center; border-radius: 50%; color: #fff; font-weight: 750; }
 form { display: inline; }
 button { margin: 2px; border: 0; border-radius: 7px; padding: 8px 10px; background: #166534; color: #fff; cursor: pointer; }
+.storage-cell { display: grid; gap: 8px; min-width: 190px; }
+.storage-form { display: flex; align-items: center; gap: 6px; }
+.storage-form input { width: 84px; padding: 7px 8px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: #1f2933; font: inherit; }
+.storage-save { background: #14532d; }
 .deny { background: #991b1b; }
 .reset { background: #374151; }
 .promote { background: #6d28d9; }
@@ -25,5 +29,6 @@ html[data-theme="dark"] table { background: #1f2937; }
 html[data-theme="dark"] th { background: #111827; }
 html[data-theme="dark"] th,
 html[data-theme="dark"] td { border-color: #374151; }
+html[data-theme="dark"] .storage-form input { border-color: #4b5563; background: #111827; color: #f9fafb; }
 html[data-theme="dark"] .protected-role { color: #cbd5e1; }
 html[data-theme="dark"] .notice { border-color: #166534; background: #123524; color: #dcfce7; }

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -20,6 +21,7 @@ from filedrop_config import (
     CSRF_TOKEN_BYTES,
     DATABASE_FILENAME,
     DEFAULT_PARALLEL_UPLOADS,
+    DEFAULT_STORAGE_LIMIT_BYTES,
     DEFAULT_UPLOAD_DIRECTORY,
     EMAIL_MAX_LENGTH,
     FORM_CONSTRAINTS,
@@ -119,6 +121,7 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
             must_change_password INTEGER NOT NULL DEFAULT 0,
             is_initial_admin INTEGER NOT NULL DEFAULT 0,
+            storage_limit_bytes INTEGER NOT NULL DEFAULT {DEFAULT_STORAGE_LIMIT_BYTES},
             avatar_color TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
@@ -175,6 +178,33 @@ def init_db():
             dismissed_at TEXT,
             PRIMARY KEY (user_id, notification_key)
         );
+        CREATE TABLE IF NOT EXISTS file_records (
+            file_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            path_folded TEXT NOT NULL,
+            name TEXT NOT NULL,
+            name_folded TEXT NOT NULL,
+            type TEXT NOT NULL CHECK (type IN ('file', 'folder')),
+            size INTEGER,
+            modified_at REAL,
+            UNIQUE(user_id, path)
+        );
+        CREATE INDEX IF NOT EXISTS file_records_exact_path_idx ON file_records(user_id, path_folded);
+        CREATE INDEX IF NOT EXISTS file_records_exact_name_idx ON file_records(user_id, name_folded);
+        CREATE INDEX IF NOT EXISTS file_records_parent_rank_idx ON file_records(user_id, path);
+        CREATE TABLE IF NOT EXISTS file_prefixes (
+            prefix TEXT NOT NULL,
+            file_id INTEGER NOT NULL REFERENCES file_records(file_id) ON DELETE CASCADE,
+            PRIMARY KEY (prefix, file_id)
+        );
+        CREATE INDEX IF NOT EXISTS file_prefixes_file_idx ON file_prefixes(file_id);
+        CREATE TABLE IF NOT EXISTS file_terms (
+            term TEXT NOT NULL,
+            file_id INTEGER NOT NULL REFERENCES file_records(file_id) ON DELETE CASCADE,
+            PRIMARY KEY (term, file_id)
+        );
+        CREATE INDEX IF NOT EXISTS file_terms_file_idx ON file_terms(file_id);
         CREATE TABLE IF NOT EXISTS app_migrations (
             name TEXT PRIMARY KEY
         );
@@ -183,6 +213,8 @@ def init_db():
     user_columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
     if "is_initial_admin" not in user_columns:
         db.execute("ALTER TABLE users ADD COLUMN is_initial_admin INTEGER NOT NULL DEFAULT 0")
+    if "storage_limit_bytes" not in user_columns:
+        db.execute(f"ALTER TABLE users ADD COLUMN storage_limit_bytes INTEGER NOT NULL DEFAULT {DEFAULT_STORAGE_LIMIT_BYTES}")
     preference_columns = {row["name"] for row in db.execute("PRAGMA table_info(user_preferences)")}
     if "sort_by" not in preference_columns:
         db.execute("ALTER TABLE user_preferences ADD COLUMN sort_by TEXT NOT NULL DEFAULT 'manual'")
@@ -313,7 +345,7 @@ def load_user_and_check_csrf():
     if session_id:
         row = get_db().execute(
             """SELECT sessions.*, users.username, users.email, users.role, users.status,
-                      users.must_change_password, users.avatar_color
+                      users.must_change_password, users.avatar_color, users.storage_limit_bytes
                FROM sessions JOIN users ON users.id = sessions.user_id
                WHERE sessions.id = ? AND sessions.expires_at > ?""",
             (session_id, iso_time(utc_now())),
@@ -416,6 +448,18 @@ def parse_upload_file(upload):
     return filename
 
 
+def upload_size(upload):
+    stream = upload.stream
+    try:
+        position = stream.tell()
+        stream.seek(0, os.SEEK_END)
+        size = stream.tell()
+        stream.seek(position)
+        return size
+    except (AttributeError, OSError):
+        return upload.content_length or 0
+
+
 def accessible_root():
     home = (UPLOAD_ROOT / g.user["username"]).resolve()
     home.mkdir(exist_ok=True)
@@ -426,6 +470,79 @@ def user_accessible_root(user):
     home = (UPLOAD_ROOT / user["username"]).resolve()
     home.mkdir(exist_ok=True)
     return home
+
+
+def directory_size(path):
+    total = 0
+    if not path.exists():
+        return total
+    for item in path.rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def storage_usage_for_user(user):
+    return directory_size(user_accessible_root(user))
+
+
+def user_id_value(user):
+    return user["id"] if "id" in user.keys() else user["user_id"]
+
+
+def storage_payload_for_user(user):
+    used = storage_usage_for_user(user)
+    limit = int(user["storage_limit_bytes"] or DEFAULT_STORAGE_LIMIT_BYTES)
+    return {
+        "usedBytes": used,
+        "limitBytes": limit,
+        "percent": min(100, round((used / limit) * 100, 1)) if limit > 0 else 100,
+    }
+
+
+def format_bytes(value):
+    units = ("bytes", "KB", "MB", "GB", "TB")
+    amount = float(value)
+    unit_index = 0
+    while amount >= 1024 and unit_index < len(units) - 1:
+        amount /= 1024
+        unit_index += 1
+    return f"{amount:.1f} {units[unit_index]}" if unit_index else f"{int(amount)} {units[unit_index]}"
+
+
+def enforce_storage_limit(user, incoming_size, destination=None):
+    limit = int(user["storage_limit_bytes"] or DEFAULT_STORAGE_LIMIT_BYTES)
+    existing_size = 0
+    if destination and destination.exists() and destination.is_file():
+        try:
+            existing_size = destination.stat().st_size
+        except OSError:
+            existing_size = 0
+    projected = storage_usage_for_user(user) + max(0, incoming_size - existing_size)
+    if projected > limit:
+        abort(
+            413,
+            description=f"Storage limit exceeded. This account can use {format_bytes(limit)}.",
+        )
+
+
+def admin_user_rows():
+    rows = get_db().execute("SELECT * FROM users ORDER BY status != 'pending', username COLLATE NOCASE").fetchall()
+    users = []
+    for row in rows:
+        used = storage_usage_for_user(row)
+        limit = row["storage_limit_bytes"] or DEFAULT_STORAGE_LIMIT_BYTES
+        users.append({
+            **dict(row),
+            "storage_used_bytes": used,
+            "storage_limit_gb": round(limit / (1024 ** 3), 2),
+            "storage_used_label": format_bytes(used),
+            "storage_limit_label": format_bytes(limit),
+        })
+    return users
 
 
 def resolve_upload_path(relative_path=""):
@@ -458,6 +575,109 @@ def item_payload(path, root=None):
         elif extension in VIDEO_PREVIEW_EXTENSIONS:
             payload["preview"] = "video"
     return payload
+
+
+SEARCH_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+SEARCH_CONTENT_EXTENSIONS = {"csv", "json", "log", "md", "py", "rtf", "text", "txt", "xml", "yaml", "yml"}
+SEARCH_CONTENT_MAX_BYTES = 512 * 1024
+
+
+def search_tokens(value):
+    return {token.casefold() for token in SEARCH_TOKEN_RE.findall(value or "") if token}
+
+
+def prefixes_for(value):
+    folded = (value or "").casefold()
+    parts = {folded, Path(folded).name}
+    prefixes = set()
+    for index in range(1, min(len(folded), 160) + 1):
+        prefixes.add(folded[:index])
+    for part in parts:
+        for token in re.split(r"[/\s._!()\[\]{}-]+", part):
+            token = token.strip()
+            if not token:
+                continue
+            for index in range(1, min(len(token), 80) + 1):
+                prefixes.add(token[:index])
+    return prefixes
+
+
+def index_content_terms(path):
+    if not path.is_file() or path.suffix.lstrip(".").casefold() not in SEARCH_CONTENT_EXTENSIONS:
+        return set()
+    try:
+        if path.stat().st_size > SEARCH_CONTENT_MAX_BYTES:
+            return set()
+        return search_tokens(path.read_text(errors="ignore"))
+    except OSError:
+        return set()
+
+
+def upsert_search_record(user, path, root=None):
+    root = root or user_accessible_root(user)
+    if not path.exists():
+        return
+    payload = item_payload(path, root=root)
+    terms = search_tokens(payload["name"]) | search_tokens(payload["path"]) | index_content_terms(path)
+    prefixes = prefixes_for(payload["name"]) | prefixes_for(payload["path"])
+    db = get_db()
+    user_id = user_id_value(user)
+    existing = db.execute("SELECT file_id FROM file_records WHERE user_id = ? AND path = ?", (user_id, payload["path"])).fetchone()
+    if existing:
+        file_id = existing["file_id"]
+        db.execute(
+            """UPDATE file_records
+               SET path_folded = ?, name = ?, name_folded = ?, type = ?, size = ?, modified_at = ?
+               WHERE file_id = ?""",
+            (payload["path"].casefold(), payload["name"], payload["name"].casefold(), payload["type"], payload.get("size"), payload.get("modifiedAt"), file_id),
+        )
+    else:
+        cursor = db.execute(
+            """INSERT INTO file_records
+               (user_id, path, path_folded, name, name_folded, type, size, modified_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, payload["path"], payload["path"].casefold(), payload["name"], payload["name"].casefold(), payload["type"], payload.get("size"), payload.get("modifiedAt")),
+        )
+        file_id = cursor.lastrowid
+    db.execute("DELETE FROM file_prefixes WHERE file_id = ?", (file_id,))
+    db.execute("DELETE FROM file_terms WHERE file_id = ?", (file_id,))
+    db.executemany("INSERT OR IGNORE INTO file_prefixes (prefix, file_id) VALUES (?, ?)", ((prefix, file_id) for prefix in prefixes))
+    db.executemany("INSERT OR IGNORE INTO file_terms (term, file_id) VALUES (?, ?)", ((term, file_id) for term in terms))
+
+
+def delete_search_records(user, relative_path):
+    user_id = user_id_value(user)
+    path = (relative_path or "").strip("/")
+    db = get_db()
+    rows = db.execute(
+        "SELECT file_id FROM file_records WHERE user_id = ? AND (path = ? OR path LIKE ?)",
+        (user_id, path, f"{path}/%"),
+    ).fetchall()
+    file_ids = [row["file_id"] for row in rows]
+    if not file_ids:
+        return
+    placeholders = ",".join("?" for _ in file_ids)
+    db.execute(f"DELETE FROM file_prefixes WHERE file_id IN ({placeholders})", file_ids)
+    db.execute(f"DELETE FROM file_terms WHERE file_id IN ({placeholders})", file_ids)
+    db.execute(f"DELETE FROM file_records WHERE file_id IN ({placeholders})", file_ids)
+
+
+def index_path_tree(user, path, root=None):
+    root = root or user_accessible_root(user)
+    if not path.exists():
+        return
+    upsert_search_record(user, path, root=root)
+    if path.is_dir():
+        for child in path.rglob("*"):
+            upsert_search_record(user, child, root=root)
+
+
+def ensure_search_index(user):
+    user_id = user_id_value(user)
+    if get_db().execute("SELECT 1 FROM file_records WHERE user_id = ? LIMIT 1", (user_id,)).fetchone():
+        return
+    index_path_tree(user, user_accessible_root(user))
+    get_db().commit()
 
 
 def ordered_items(folder, root=None, user_id=None):
@@ -716,6 +936,7 @@ def render_browser(relative_path=""):
             user=g.user,
             share=None,
             root_label=g.user["username"],
+            storage=storage_payload_for_user(g.user),
         )
     )
     response.headers["Cache-Control"] = "private, max-age=30" if request.headers.get("X-Filedrop-Prefetch") == "1" else "private, no-cache"
@@ -753,6 +974,7 @@ def render_share_browser(token, relative_path=""):
                 "accessMode": share["access_mode"],
             },
             root_label=share["username"],
+            storage=None,
         )
     )
     response.headers["Cache-Control"] = "private, no-cache"
@@ -909,8 +1131,25 @@ def change_password():
 @app.get("/admin")
 @admin_required
 def admin():
-    users = get_db().execute("SELECT * FROM users ORDER BY status != 'pending', username COLLATE NOCASE").fetchall()
-    return render_template("admin.html", users=users, csrf_token=g.session["csrf_token"])
+    return render_template("admin.html", users=admin_user_rows(), csrf_token=g.session["csrf_token"])
+
+
+@app.post("/admin/users/<int:user_id>/storage-limit")
+@admin_required
+def update_user_storage_limit(user_id):
+    user = get_db().execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        abort(404, description="User was not found.")
+    try:
+        limit_gb = float(request.form.get("storage_limit_gb", ""))
+    except ValueError:
+        abort(400, description="Storage limit must be a number.")
+    if limit_gb <= 0 or limit_gb > 1024 * 1024:
+        abort(400, description="Storage limit must be greater than 0 GB.")
+    limit_bytes = int(limit_gb * 1024 * 1024 * 1024)
+    get_db().execute("UPDATE users SET storage_limit_bytes = ? WHERE id = ?", (limit_bytes, user_id))
+    get_db().commit()
+    return redirect(url_for("admin"))
 
 
 @app.post("/admin/users/<int:user_id>/approve")
@@ -944,8 +1183,7 @@ def reset_user_password(user_id):
     get_db().execute("UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?", (generate_password_hash(temporary_password, method=PASSWORD_HASH_METHOD), user_id))
     get_db().execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     get_db().commit()
-    users = get_db().execute("SELECT * FROM users ORDER BY status != 'pending', username COLLATE NOCASE").fetchall()
-    return render_template("admin.html", users=users, csrf_token=g.session["csrf_token"], temporary_password=temporary_password, reset_username=user["username"])
+    return render_template("admin.html", users=admin_user_rows(), csrf_token=g.session["csrf_token"], temporary_password=temporary_password, reset_username=user["username"])
 
 
 @app.post("/admin/users/<int:user_id>/promote")
@@ -1013,6 +1251,12 @@ def health():
     if not UPLOAD_ROOT.exists() or not UPLOAD_ROOT.is_dir() or not os.access(UPLOAD_ROOT, os.W_OK):
         return jsonify({"status": "error", "message": "Upload directory is unavailable."}), 503
     return jsonify({"status": "ok", "checkedAt": iso_time(utc_now())})
+
+
+@app.get("/api/storage")
+@login_required
+def storage_usage():
+    return jsonify(storage_payload_for_user(g.user))
 
 
 @app.patch("/api/preferences")
@@ -1226,6 +1470,75 @@ def items():
     return jsonify({"items": ordered_items(folder), "parent": "" if parent_path == "." else parent_path, "path": "" if folder == root else folder.relative_to(root).as_posix()})
 
 
+@app.get("/api/search")
+@login_required
+def search_files():
+    query = request.args.get("q", "").strip()
+    current_path = "/".join(validate_relative_path(request.args.get("path", ""), "Search path"))
+    if len(query) < 1:
+        return jsonify({"results": []})
+    ensure_search_index(g.user)
+    folded = query.casefold()
+    terms = list(search_tokens(query))
+    user_id = g.user["user_id"]
+    db = get_db()
+    rows_by_id = {}
+
+    def add_rows(rows):
+        for row in rows:
+            if row["path"]:
+                rows_by_id[row["file_id"]] = row
+
+    add_rows(db.execute(
+        """SELECT * FROM file_records
+           WHERE user_id = ? AND (path_folded = ? OR name_folded = ?)
+           LIMIT 40""",
+        (user_id, folded, folded),
+    ))
+    add_rows(db.execute(
+        """SELECT file_records.*
+           FROM file_prefixes JOIN file_records ON file_records.file_id = file_prefixes.file_id
+           WHERE file_records.user_id = ? AND file_prefixes.prefix = ?
+           LIMIT 80""",
+        (user_id, folded),
+    ))
+    if terms:
+        placeholders = ",".join("?" for _ in terms)
+        add_rows(db.execute(
+            f"""SELECT file_records.*, COUNT(file_terms.term) AS matched_terms
+                FROM file_terms JOIN file_records ON file_records.file_id = file_terms.file_id
+                WHERE file_records.user_id = ? AND file_terms.term IN ({placeholders})
+                GROUP BY file_records.file_id
+                ORDER BY matched_terms DESC
+                LIMIT 80""",
+            (user_id, *terms),
+        ))
+
+    def rank(row):
+        parent = Path(row["path"]).parent.as_posix()
+        parent = "" if parent == "." else parent
+        in_current = parent == current_path
+        under_current = bool(current_path) and row["path"].startswith(f"{current_path}/")
+        exact_name = row["name_folded"] == folded
+        prefix_name = row["name_folded"].startswith(folded)
+        return (0 if in_current else 1 if under_current else 2, 0 if exact_name else 1 if prefix_name else 2, row["name_folded"])
+
+    results = sorted(rows_by_id.values(), key=rank)[:30]
+    return jsonify({
+        "results": [
+            {
+                "fileId": row["file_id"],
+                "name": row["name"],
+                "path": row["path"],
+                "parent": "" if Path(row["path"]).parent.as_posix() == "." else Path(row["path"]).parent.as_posix(),
+                "type": row["type"],
+                "size": row["size"],
+            }
+            for row in results
+        ]
+    })
+
+
 @app.get("/api/shares/<token>/items")
 def shared_items(token):
     share = get_share(token)
@@ -1252,6 +1565,8 @@ def create_folder():
     if new_folder.exists():
         abort(409, description="A file or folder with that name already exists.")
     new_folder.mkdir()
+    upsert_search_record(g.user, new_folder)
+    get_db().commit()
     return jsonify(item_payload(new_folder)), 201
 
 
@@ -1269,6 +1584,9 @@ def create_shared_folder(token):
     if new_folder.exists():
         abort(409, description="A file or folder with that name already exists.")
     new_folder.mkdir()
+    owner = get_db().execute("SELECT * FROM users WHERE id = ?", (share["owner_id"],)).fetchone()
+    upsert_search_record(owner, new_folder, root=user_accessible_root(owner))
+    get_db().commit()
     return jsonify(share_item_payload(new_folder, root)), 201
 
 
@@ -1303,7 +1621,9 @@ def create_folder_tree():
         if directory.exists():
             continue
         directory.mkdir(parents=True)
+        upsert_search_record(g.user, directory)
         created += 1
+    get_db().commit()
     return jsonify({"created": created}), 201
 
 
@@ -1342,7 +1662,10 @@ def create_shared_folder_tree(token):
         if directory.exists():
             continue
         directory.mkdir(parents=True)
+        owner = get_db().execute("SELECT * FROM users WHERE id = ?", (share["owner_id"],)).fetchone()
+        upsert_search_record(owner, directory, root=user_accessible_root(owner))
         created += 1
+    get_db().commit()
     return jsonify({"created": created}), 201
 
 
@@ -1364,6 +1687,8 @@ def create_folder_from_selection():
     moves = prepare_item_moves(item_paths, new_folder, replace_existing=replace_existing)
     new_folder.mkdir()
     moved = execute_item_moves(moves, replace_existing=replace_existing)
+    index_path_tree(g.user, new_folder)
+    get_db().commit()
     return jsonify({"folder": item_payload(new_folder), "moved": moved}), 201
 
 
@@ -1388,6 +1713,9 @@ def create_shared_folder_from_selection(token):
     moves = prepare_item_moves(item_paths, new_folder, replace_existing=replace_existing, root=root, resolver=resolver)
     new_folder.mkdir()
     moved = execute_item_moves(moves, replace_existing=replace_existing)
+    owner = get_db().execute("SELECT * FROM users WHERE id = ?", (share["owner_id"],)).fetchone()
+    index_path_tree(owner, new_folder, root=user_accessible_root(owner))
+    get_db().commit()
     return jsonify({"folder": share_item_payload(new_folder, root), "moved": moved}), 201
 
 
@@ -1402,7 +1730,11 @@ def rename_item():
     destination = item_path.with_name(new_name)
     if destination.exists():
         abort(409, description="A file or folder with that name already exists.")
+    old_relative = item_path.relative_to(accessible_root()).as_posix()
     item_path.rename(destination)
+    delete_search_records(g.user, old_relative)
+    index_path_tree(g.user, destination)
+    get_db().commit()
     return jsonify(item_payload(destination))
 
 
@@ -1419,7 +1751,12 @@ def rename_shared_item(token):
     destination = item_path.with_name(new_name)
     if destination.exists():
         abort(409, description="A file or folder with that name already exists.")
+    owner = get_db().execute("SELECT * FROM users WHERE id = ?", (share["owner_id"],)).fetchone()
+    old_relative = item_path.relative_to(user_accessible_root(owner)).as_posix()
     item_path.rename(destination)
+    delete_search_records(owner, old_relative)
+    index_path_tree(owner, destination, root=user_accessible_root(owner))
+    get_db().commit()
     return jsonify(share_item_payload(destination, root))
 
 
@@ -1436,7 +1773,14 @@ def move_items():
 
     replace_existing = data.get("replace") is True
     moves = prepare_item_moves(item_paths, destination_folder, replace_existing=replace_existing)
-    return jsonify({"moved": execute_item_moves(moves, replace_existing=replace_existing)})
+    old_paths = [path.relative_to(accessible_root()).as_posix() for path, _destination in moves]
+    moved = execute_item_moves(moves, replace_existing=replace_existing)
+    for old_path in old_paths:
+        delete_search_records(g.user, old_path)
+    for _source, destination in moves:
+        index_path_tree(g.user, destination)
+    get_db().commit()
+    return jsonify({"moved": moved})
 
 
 @app.post("/api/shares/<token>/items/move")
@@ -1454,7 +1798,16 @@ def move_shared_items(token):
     replace_existing = data.get("replace") is True
     resolver = lambda path: resolve_share_path(share, path)[0]
     moves = prepare_item_moves(item_paths, destination_folder, replace_existing=replace_existing, root=root, resolver=resolver)
-    return jsonify({"moved": execute_item_moves(moves, replace_existing=replace_existing)})
+    owner = get_db().execute("SELECT * FROM users WHERE id = ?", (share["owner_id"],)).fetchone()
+    owner_root = user_accessible_root(owner)
+    old_paths = [path.relative_to(owner_root).as_posix() for path, _destination in moves]
+    moved = execute_item_moves(moves, replace_existing=replace_existing)
+    for old_path in old_paths:
+        delete_search_records(owner, old_path)
+    for _source, destination in moves:
+        index_path_tree(owner, destination, root=owner_root)
+    get_db().commit()
+    return jsonify({"moved": moved})
 
 
 @app.put("/api/items/order")
@@ -1513,7 +1866,10 @@ def delete_item():
     item_path = resolve_upload_path(request.args.get("path", ""))
     if item_path == accessible_root() or not item_path.exists():
         abort(404, description="File or folder was not found.")
+    relative_path = item_path.relative_to(accessible_root()).as_posix()
     shutil.rmtree(item_path) if item_path.is_dir() else item_path.unlink()
+    delete_search_records(g.user, relative_path)
+    get_db().commit()
     return Response(status=204)
 
 
@@ -1524,7 +1880,11 @@ def delete_shared_item(token):
     item_path, root = resolve_share_path(share, request.args.get("path", ""))
     if item_path == root or not item_path.exists():
         abort(404, description="File or folder was not found.")
+    owner = get_db().execute("SELECT * FROM users WHERE id = ?", (share["owner_id"],)).fetchone()
+    relative_path = item_path.relative_to(user_accessible_root(owner)).as_posix()
     shutil.rmtree(item_path) if item_path.is_dir() else item_path.unlink()
+    delete_search_records(owner, relative_path)
+    get_db().commit()
     return Response(status=204)
 
 
@@ -1543,7 +1903,9 @@ def upload_file():
         if receipt:
             path = accessible_root() / receipt["path"]
             return jsonify({"filename": path.name, "path": receipt["path"], "item": item_payload(path)}), 200
-    filename = parse_upload_file(request.files.get("file"))
+    upload = request.files.get("file")
+    filename = parse_upload_file(upload)
+    incoming_size = upload_size(upload)
     folder = resolve_upload_path(request.form.get("path", ""))
     if folder.exists() and not folder.is_dir():
         abort(409, description="A file already exists in the upload path.")
@@ -1553,14 +1915,16 @@ def upload_file():
     destination = folder / saved_filename
     if replace_existing and destination.exists() and destination.is_dir():
         abort(409, description="A folder with that name already exists.")
-    request.files["file"].save(folder / saved_filename)
+    enforce_storage_limit(g.user, incoming_size, destination if replace_existing else None)
+    upload.save(destination)
     saved_path = (folder / saved_filename).relative_to(accessible_root()).as_posix()
+    upsert_search_record(g.user, destination)
     if upload_id:
         db.execute(
             "INSERT INTO upload_receipts (user_id, upload_id, path, created_at) VALUES (?, ?, ?, ?)",
             (g.user["user_id"], upload_id, saved_path, iso_time(utc_now())),
         )
-        db.commit()
+    get_db().commit()
     return jsonify({"filename": saved_filename, "path": saved_path, "item": item_payload(destination)}), 201
 
 
@@ -1571,7 +1935,9 @@ def upload_shared_file(token):
     upload_id = request.headers.get("X-Upload-ID", "").strip()
     if upload_id and (len(upload_id) > 100 or not upload_id.replace("-", "").isalnum()):
         abort(400, description="Upload ID is invalid.")
-    filename = parse_upload_file(request.files.get("file"))
+    upload = request.files.get("file")
+    filename = parse_upload_file(upload)
+    incoming_size = upload_size(upload)
     folder, root = resolve_share_path(share, request.form.get("path", ""))
     if folder.exists() and not folder.is_dir():
         abort(409, description="A file already exists in the upload path.")
@@ -1581,8 +1947,12 @@ def upload_shared_file(token):
     destination = folder / saved_filename
     if replace_existing and destination.exists() and destination.is_dir():
         abort(409, description="A folder with that name already exists.")
-    request.files["file"].save(destination)
+    owner = get_db().execute("SELECT * FROM users WHERE id = ?", (share["owner_id"],)).fetchone()
+    enforce_storage_limit(owner, incoming_size, destination if replace_existing else None)
+    upload.save(destination)
     saved_path = destination.relative_to(root).as_posix()
+    upsert_search_record(owner, destination, root=user_accessible_root(owner))
+    get_db().commit()
     return jsonify({"filename": saved_filename, "path": saved_path, "item": share_item_payload(destination, root)}), 201
 
 
