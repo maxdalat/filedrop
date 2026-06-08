@@ -54,7 +54,8 @@ window.fetch = async (resource, options = {}) => {
   }
   if (url.origin === window.location.origin && url.pathname.startsWith("/api/")) {
     const contentType = response.headers.get("Content-Type") || "";
-    if (response.redirected || contentType.includes("text/html")) {
+    const responseAllowsBody = ![204, 205, 304].includes(response.status);
+    if (responseAllowsBody && (response.redirected || contentType.includes("text/html"))) {
       const message = response.redirected
         ? "Sign in again before using Filedrop."
         : `The server returned a page instead of data for ${url.pathname}.`;
@@ -2168,6 +2169,9 @@ async function deleteItemRequest(path) {
       data = {};
     }
 
+    if (response.status === 404) {
+      return { ok: true, alreadyGone: true };
+    }
     return { ok: false, message: data.message || `Could not delete ${path}.` };
   }
 

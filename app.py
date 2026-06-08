@@ -10,7 +10,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from flask import Flask, abort, g, jsonify, make_response, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, Response, abort, g, jsonify, make_response, redirect, render_template, request, send_from_directory, url_for
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -1100,7 +1100,7 @@ def dismiss_notification(notification_key):
         (g.user["user_id"], notification_key, now, now),
     )
     get_db().commit()
-    return "", 204
+    return Response(status=204)
 
 
 @app.post("/api/shares")
@@ -1193,7 +1193,7 @@ def delete_share(token):
         abort(403, description="Only the owner can remove this share link.")
     get_db().execute("DELETE FROM share_links WHERE token = ?", (token,))
     get_db().commit()
-    return "", 204
+    return Response(status=204)
 
 
 @app.get("/api/users/search")
@@ -1514,7 +1514,7 @@ def delete_item():
     if item_path == accessible_root() or not item_path.exists():
         abort(404, description="File or folder was not found.")
     shutil.rmtree(item_path) if item_path.is_dir() else item_path.unlink()
-    return "", 204
+    return Response(status=204)
 
 
 @app.delete("/api/shares/<token>/items")
@@ -1525,7 +1525,7 @@ def delete_shared_item(token):
     if item_path == root or not item_path.exists():
         abort(404, description="File or folder was not found.")
     shutil.rmtree(item_path) if item_path.is_dir() else item_path.unlink()
-    return "", 204
+    return Response(status=204)
 
 
 @app.post("/api/files")
