@@ -37,31 +37,6 @@
             </div>
           </div>
           {% endif %}
-          {% if user and not share %}
-          <div class="share">
-            <button class="share-toggle" type="button" id="share-toggle" aria-label="Share folder" aria-expanded="false" aria-controls="share-panel">
-              <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
-                <path d="M12 15V3m0 0 4 4m-4-4-4 4M6 11v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-8"/>
-              </svg>
-            </button>
-            <div class="share-panel" id="share-panel" hidden>
-              <div class="settings-heading">Share folder</div>
-              <div class="share-access-options" id="share-access-options" aria-label="Share access">
-                <button type="button" data-access-mode="restricted_edit">Editable to Invited Users</button>
-                <button type="button" data-access-mode="view">Viewable to all</button>
-                <button type="button" data-access-mode="edit">Editable to All</button>
-              </div>
-              <div class="share-editors" id="share-editors-group" hidden>
-                <label class="setting-label" for="share-editors-input">Invited editors</label>
-                <div class="share-editor-box" id="share-editor-box">
-                  <div class="share-editor-chips" id="share-editor-chips"></div>
-                  <input id="share-editors-input" autocomplete="off" placeholder="Type a username">
-                </div>
-                <div class="share-user-suggestions" id="share-user-suggestions" hidden></div>
-              </div>
-            </div>
-          </div>
-          {% endif %}
           {% if user %}
           <div class="account">
             <button class="account-toggle" type="button" id="account-toggle" aria-label="Account menu" aria-expanded="false" aria-controls="account-panel">
@@ -116,13 +91,72 @@
                 <label for="full-view">Use full-width file view</label>
                 <input type="checkbox" id="full-view">
               </div>
+              <div class="setting-row">
+                <label for="recent-days">Recents window</label>
+                <input class="compact-number-input" type="number" id="recent-days" min="1" max="365">
+              </div>
+              <div class="setting-row">
+                <label for="trash-retention-days">Trash auto-delete days</label>
+                <input class="compact-number-input" type="number" id="trash-retention-days" min="1" max="365">
+              </div>
+              <div class="setting-row">
+                <label for="trash-limit-gb">Trash limit GB</label>
+                <input class="compact-number-input" type="number" id="trash-limit-gb" min="0" step="0.5">
+              </div>
+              <button class="menu-action-button danger" type="button" id="empty-trash-settings">Empty Trash</button>
             </div>
           </div>
         </div>
       </div>
     </header>
 
-    <main>
+    <main class="app-shell">
+      {% if user and not share %}
+      <aside class="sidebar" aria-label="File sections">
+        <nav class="sidebar-primary" id="sidebar-primary">
+          <button class="sidebar-mode is-active" type="button" data-mode="all" data-path="">
+            <span class="sidebar-icon" aria-hidden="true">□</span>
+            <span>All Files</span>
+          </button>
+          <button class="sidebar-mode" type="button" data-mode="recents">
+            <span class="sidebar-icon" aria-hidden="true">◷</span>
+            <span>Recents</span>
+          </button>
+          <button class="sidebar-mode" type="button" data-mode="shared">
+            <span class="sidebar-icon" aria-hidden="true">⌘</span>
+            <span>Shared</span>
+          </button>
+          <button class="sidebar-mode" type="button" data-mode="favorites">
+            <span class="sidebar-icon" aria-hidden="true">☆</span>
+            <span>Favorites</span>
+          </button>
+          <button class="sidebar-mode" type="button" data-mode="trash" id="trash-sidebar-button">
+            <span class="sidebar-icon" aria-hidden="true">⌫</span>
+            <span>Trash</span>
+          </button>
+        </nav>
+        <div class="sidebar-section">
+          <div class="sidebar-section-heading">
+            <span>My Folders</span>
+            <button class="sidebar-small-button" type="button" id="sidebar-new-folder" aria-label="Create folder">+</button>
+          </div>
+          <div class="sidebar-folder-list" id="sidebar-folder-list"></div>
+          <div class="sidebar-hide-drop" id="sidebar-hide-drop">Hide folder</div>
+        </div>
+        {% if storage %}
+        <aside class="storage-meter" id="storage-meter" aria-label="Storage usage">
+          <div class="storage-meter-row">
+            <span id="storage-meter-label"></span>
+          </div>
+          <div class="storage-meter-track">
+            <div class="storage-meter-fill" id="storage-meter-fill"></div>
+          </div>
+          <button class="manage-storage-button" type="button" id="manage-storage-button">Manage Storage</button>
+        </aside>
+        {% endif %}
+      </aside>
+      {% endif %}
+      <section class="content-panel">
       <div class="upload-panel" id="upload-panel">
         <div class="upload-panel-header">
           <span class="upload-elapsed" id="upload-elapsed">Elapsed 00:00</span>
@@ -142,18 +176,6 @@
         <div class="upload-list" id="upload-list"></div>
       </div>
       <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
-      {% if storage %}
-      <aside class="storage-meter" id="storage-meter" aria-label="Storage usage">
-        <div class="storage-meter-row">
-          <span>Storage</span>
-          <span id="storage-meter-label"></span>
-        </div>
-        <div class="storage-meter-track">
-          <div class="storage-meter-fill" id="storage-meter-fill"></div>
-        </div>
-      </aside>
-      {% endif %}
-
       <p class="status" id="status" hidden></p>
       {% if share %}
       <div class="share-notice" id="share-notice">
@@ -168,7 +190,14 @@
 
       <nav class="breadcrumbs" id="breadcrumbs" aria-label="Current folder"></nav>
 
-      <div class="folder-toolbar">
+      <div class="folder-hero">
+        <div class="folder-identity">
+          <div class="folder-large-icon" aria-hidden="true"></div>
+          <div>
+            <h1 id="folder-title">Files</h1>
+            <div class="folder-meta" id="folder-meta"></div>
+          </div>
+        </div>
         <div class="folder-toolbar-actions">
           <form class="upload-form" id="upload-form">
             <button class="choose-files-button" id="choose-upload-button" type="button" aria-expanded="false" aria-controls="upload-choice-menu">Upload</button>
@@ -179,6 +208,29 @@
             <input class="file-input" type="file" name="file" id="file-input" multiple>
             <input class="file-input" type="file" id="folder-input" webkitdirectory multiple>
           </form>
+          {% if user and not share %}
+          <div class="share">
+            <button class="more-toggle" type="button" id="share-toggle" aria-label="More folder actions" aria-expanded="false" aria-controls="share-panel">•••</button>
+            <div class="share-panel" id="share-panel" hidden>
+              <div class="settings-heading">Folder Actions</div>
+              <button class="menu-action-button" type="button" id="favorite-current-button">Add to favorites</button>
+              <div class="settings-heading">Share folder</div>
+              <div class="share-access-options" id="share-access-options" aria-label="Share access">
+                <button type="button" data-access-mode="restricted_edit">Editable to Invited Users</button>
+                <button type="button" data-access-mode="view">Viewable to all</button>
+                <button type="button" data-access-mode="edit">Editable to All</button>
+              </div>
+              <div class="share-editors" id="share-editors-group" hidden>
+                <label class="setting-label" for="share-editors-input">Invited editors</label>
+                <div class="share-editor-box" id="share-editor-box">
+                  <div class="share-editor-chips" id="share-editor-chips"></div>
+                  <input id="share-editors-input" autocomplete="off" placeholder="Type a username">
+                </div>
+                <div class="share-user-suggestions" id="share-user-suggestions" hidden></div>
+              </div>
+            </div>
+          </div>
+          {% endif %}
         </div>
       </div>
 
@@ -227,6 +279,7 @@
           <button class="rename-popover-cancel" type="button" id="rename-popover-cancel">Cancel</button>
         </div>
       </form>
+      </section>
     </main>
 
     <script>window.FILEDROP_PREFERENCES = {{ preferences|tojson }};</script>

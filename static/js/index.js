@@ -133,6 +133,10 @@ const confirmBulkDelete = document.querySelector("#confirm-bulk-delete");
 const themeSelect = document.querySelector("#theme-select");
 const conflictSelect = document.querySelector("#conflict-select");
 const fullView = document.querySelector("#full-view");
+const recentDaysInput = document.querySelector("#recent-days");
+const trashRetentionInput = document.querySelector("#trash-retention-days");
+const trashLimitInput = document.querySelector("#trash-limit-gb");
+const emptyTrashSettings = document.querySelector("#empty-trash-settings");
 const fileToolbar = document.querySelector("#file-toolbar");
 const selectAllCheckbox = document.querySelector("#select-all-checkbox");
 const sortButtons = Array.from(document.querySelectorAll(".sort-button"));
@@ -159,6 +163,14 @@ const shareEditorsGroup = document.querySelector("#share-editors-group");
 const shareEditorsInput = document.querySelector("#share-editors-input");
 const shareEditorChips = document.querySelector("#share-editor-chips");
 const shareUserSuggestions = document.querySelector("#share-user-suggestions");
+const favoriteCurrentButton = document.querySelector("#favorite-current-button");
+const sidebarModes = Array.from(document.querySelectorAll(".sidebar-mode"));
+const sidebarFolderList = document.querySelector("#sidebar-folder-list");
+const sidebarHideDrop = document.querySelector("#sidebar-hide-drop");
+const sidebarNewFolder = document.querySelector("#sidebar-new-folder");
+const folderTitle = document.querySelector("#folder-title");
+const folderMeta = document.querySelector("#folder-meta");
+const manageStorageButton = document.querySelector("#manage-storage-button");
 const folderPopover = document.querySelector("#folder-popover");
 const folderPopoverLabel = document.querySelector("#folder-popover-label");
 const folderNameInput = document.querySelector("#folder-name-input");
@@ -186,6 +198,8 @@ let uploadRunId = 0;
 let selectedItems = new Set();
 let lastSelectedPath = null;
 let currentPath = document.body.dataset.currentPath || "";
+let currentMode = "all";
+let currentVirtualItems = [];
 let sortBy = ["manual", "name", "modified", "size", "extension"].includes(accountPreferences.sortBy)
   ? accountPreferences.sortBy
   : "manual";
@@ -204,6 +218,7 @@ let shareEditors = [];
 let shareSuggestionAbort;
 let shareSaveTimer;
 let isPopulatingSharePanel = false;
+let sidebarState = { shared: [], folders: [] };
 
 if (!canEdit) {
   form.hidden = true;
@@ -363,6 +378,15 @@ confirmBulkDelete.checked = !(savedConfirmBulkDelete ?? false);
 themeSelect.value = ["light", "dark", "system"].includes(savedTheme) ? savedTheme : "system";
 conflictSelect.value = savedConflictMode === "replace" ? "replace" : "add";
 fullView.checked = accountPreferences.fullView === true;
+if (recentDaysInput) {
+  recentDaysInput.value = String(accountPreferences.recentDays || 7);
+}
+if (trashRetentionInput) {
+  trashRetentionInput.value = String(accountPreferences.trashRetentionDays || 30);
+}
+if (trashLimitInput) {
+  trashLimitInput.value = String(((accountPreferences.trashLimitBytes || 15 * 1024 ** 3) / (1024 ** 3)).toFixed(1).replace(/\.0$/, ""));
+}
 updateSortButtons();
 document.body.classList.toggle("full-view", fullView.checked);
 window.FILEDROP_THEME.apply(themeSelect.value);
@@ -533,6 +557,33 @@ conflictSelect.addEventListener("change", () => {
 fullView.addEventListener("change", () => {
   document.body.classList.toggle("full-view", fullView.checked);
   savePreference("fullView", fullView.checked);
+});
+
+recentDaysInput?.addEventListener("change", () => {
+  const value = Math.max(1, Math.min(365, Number.parseInt(recentDaysInput.value, 10) || 7));
+  recentDaysInput.value = String(value);
+  savePreference("recentDays", value);
+  if (currentMode === "recents") {
+    loadItems({ force: true });
+  }
+});
+
+trashRetentionInput?.addEventListener("change", () => {
+  const value = Math.max(1, Math.min(365, Number.parseInt(trashRetentionInput.value, 10) || 30));
+  trashRetentionInput.value = String(value);
+  savePreference("trashRetentionDays", value);
+  if (currentMode === "trash") {
+    loadItems({ force: true });
+  }
+});
+
+trashLimitInput?.addEventListener("change", () => {
+  const value = Math.max(0, Number.parseFloat(trashLimitInput.value) || 0);
+  trashLimitInput.value = String(value);
+  savePreference("trashLimitBytes", Math.round(value * 1024 ** 3));
+  if (currentMode === "trash") {
+    loadItems({ force: true });
+  }
 });
 
 sortButtons.forEach((button) => {
@@ -1150,7 +1201,11 @@ function showContextMenu(item, x, y) {
   const actions = [];
   const selectedCount = selectedItems.size;
 
-  if (canEdit) {
+  if (currentMode === "trash") {
+    actions.push({ label: "Empty Trash", action: (button) => emptyTrash(button), className: "delete" });
+  }
+
+  if (canEdit && currentMode === "all") {
     if (selectedCount) {
       actions.push({ label: `New folder (${selectedCount})`, action: (button) => { openFolderPopover(button, true); } });
     } else {
@@ -1158,9 +1213,9 @@ function showContextMenu(item, x, y) {
     }
   }
 
-  if (item?.type === "folder") {
+  if (item?.type === "folder" && currentMode !== "trash") {
     actions.push({ label: "Open", action: () => { navigateToFolder(item.path); } });
-  } else if (item?.type === "file") {
+  } else if (item?.type === "file" && currentMode !== "trash") {
     actions.push({
       label: "Download",
       action: () => {
@@ -1170,7 +1225,11 @@ function showContextMenu(item, x, y) {
     });
   }
 
-  if (item && canEdit) {
+  if (item && canEdit && currentMode !== "trash") {
+    actions.push({
+      label: item.favorite ? "Remove favorite" : "Add favorite",
+      action: () => { setFavorite(item.path, !item.favorite); },
+    });
     actions.push({ label: "Rename", action: (button) => { openRenamePopover(button, item); } });
     actions.push({
       label: "Delete",
@@ -1270,19 +1329,41 @@ function rowSelectionMode(path, index, event, options = {}) {
 }
 
 function itemRequestUrl(path) {
+  if (currentMode === "recents") {
+    const days = recentDaysInput?.value || accountPreferences.recentDays || 7;
+    return `/api/items/recent?days=${encodeURIComponent(days)}`;
+  }
+  if (currentMode === "favorites") {
+    return "/api/items/favorites";
+  }
+  if (currentMode === "trash") {
+    return "/api/trash";
+  }
+  if (currentMode === "shared") {
+    return "/api/sidebar";
+  }
   const query = path ? `?path=${encodeURIComponent(path)}` : "";
   return `${apiBase("/items")}${query}`;
 }
 
 async function fetchItems(path, options = {}) {
   const force = Boolean(options.force);
-
-  if (!force && itemCache.has(path)) {
-    return itemCache.get(path);
+  if (currentMode === "shared") {
+    const response = await fetch("/api/sidebar", { cache: force ? "no-store" : "default" });
+    const data = await responseJson(response);
+    if (!response.ok) {
+      throw new Error(data.message || "Could not load shared folders.");
+    }
+    return { items: data.shared || [], path: "__shared__", parent: "" };
   }
 
-  if (!force && pendingItemLoads.has(path)) {
-    return pendingItemLoads.get(path);
+  const cacheKey = currentMode === "all" ? path : `${currentMode}:${path}`;
+  if (!force && itemCache.has(cacheKey)) {
+    return itemCache.get(cacheKey);
+  }
+
+  if (!force && pendingItemLoads.has(cacheKey)) {
+    return pendingItemLoads.get(cacheKey);
   }
 
   const request = fetch(itemRequestUrl(path), { cache: force ? "no-store" : "default" })
@@ -1293,14 +1374,14 @@ async function fetchItems(path, options = {}) {
         throw new Error(data.message || "Could not load items.");
       }
 
-      itemCache.set(path, data);
+      itemCache.set(cacheKey, data);
       return data;
     })
     .finally(() => {
-      pendingItemLoads.delete(path);
+      pendingItemLoads.delete(cacheKey);
     });
 
-  pendingItemLoads.set(path, request);
+  pendingItemLoads.set(cacheKey, request);
   return request;
 }
 
@@ -1309,7 +1390,17 @@ function preloadFolder(path) {
     return;
   }
 
-  fetchItems(path).catch(() => {});
+  const request = fetch(`${apiBase("/items")}${path ? `?path=${encodeURIComponent(path)}` : ""}`)
+    .then(async (response) => {
+      const data = await responseJson(response);
+      if (response.ok) {
+        itemCache.set(path, data);
+      }
+      return data;
+    })
+    .finally(() => pendingItemLoads.delete(path));
+  pendingItemLoads.set(path, request);
+  request.catch(() => {});
 }
 
 function prefetchFolderPage(path) {
@@ -1499,6 +1590,178 @@ function renderCurrentFolder() {
   list.className = "";
   renderItems(data);
 }
+
+function displayPathTitle(path = currentPath) {
+  if (currentMode === "recents") {
+    return "Recents";
+  }
+  if (currentMode === "shared") {
+    return "Shared";
+  }
+  if (currentMode === "favorites") {
+    return "Favorites";
+  }
+  if (currentMode === "trash") {
+    return "Trash";
+  }
+  return path ? path.split("/").at(-1) : "All Files";
+}
+
+function updateFolderHeader(data = {}) {
+  if (!folderTitle || !folderMeta) {
+    return;
+  }
+  folderTitle.textContent = displayPathTitle(data.path || currentPath);
+  const items = data.items || currentVirtualItems || [];
+  const files = items.filter((item) => item.type !== "folder").length;
+  const folders = items.filter((item) => item.type === "folder").length;
+  if (currentMode === "trash" && data.usageBytes !== undefined) {
+    folderMeta.textContent = `${items.length} deleted item${items.length === 1 ? "" : "s"} · ${formatBytes(data.usageBytes)} in trash`;
+    return;
+  }
+  folderMeta.textContent = `${folders} folder${folders === 1 ? "" : "s"} · ${files} file${files === 1 ? "" : "s"}`;
+}
+
+function setMode(mode, path = "") {
+  currentMode = mode;
+  if (mode === "all") {
+    currentPath = path || "";
+    document.body.dataset.currentPath = currentPath;
+    window.history.pushState({ path: currentPath }, "", folderUrl(currentPath));
+  }
+  sidebarModes.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.mode === mode && (mode !== "all" || (button.dataset.path || "") === path));
+  });
+  form.hidden = !canEdit || !["all"].includes(currentMode);
+  deleteSelectedButton.hidden = currentMode === "trash" || !canEdit;
+  selectAllCheckbox.closest(".select-all-control").hidden = currentMode === "trash" || !canEdit;
+  selectionCount.hidden = currentMode === "trash" || !canEdit;
+  loadItems({ force: mode !== "all" });
+}
+
+async function loadSidebar() {
+  if (!sidebarFolderList) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/sidebar");
+    const data = await responseJson(response);
+    if (!response.ok) {
+      throw new Error(data.message || "Could not load sidebar.");
+    }
+    sidebarState = data;
+    renderSidebarFolders(data.folders || []);
+  } catch (error) {
+    logClientError("Could not load sidebar", error);
+  }
+}
+
+function renderSidebarFolders(folders) {
+  sidebarFolderList.innerHTML = "";
+  folders.forEach((folder) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sidebar-folder";
+    button.draggable = true;
+    button.dataset.path = folder.path;
+    button.innerHTML = `<span class="sidebar-folder-icon" aria-hidden="true"></span><span></span>`;
+    button.querySelector("span:last-child").textContent = folder.name;
+    button.addEventListener("click", () => setMode("all", folder.path));
+    button.addEventListener("mouseenter", () => preloadFolderForNavigation(folder.path));
+    button.addEventListener("focus", () => preloadFolderForNavigation(folder.path));
+    button.addEventListener("pointerdown", () => preloadFolderForNavigation(folder.path));
+    button.addEventListener("dragstart", (event) => {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData(config.draggedItemsType, JSON.stringify([folder.path]));
+    });
+    button.addEventListener("dragover", (event) => {
+      if (!draggedItemPaths(event).length) {
+        return;
+      }
+      event.preventDefault();
+    });
+    button.addEventListener("drop", (event) => {
+      const [draggedPath] = draggedItemPaths(event);
+      if (!draggedPath || draggedPath === folder.path) {
+        return;
+      }
+      event.preventDefault();
+      const buttons = Array.from(sidebarFolderList.querySelectorAll(".sidebar-folder"));
+      const dragged = buttons.find((candidate) => candidate.dataset.path === draggedPath);
+      if (dragged) {
+        sidebarFolderList.insertBefore(dragged, button);
+        saveSidebarFolders();
+      }
+    });
+    sidebarFolderList.append(button);
+  });
+}
+
+async function saveSidebarFolders(hiddenPath) {
+  const paths = Array.from(sidebarFolderList.querySelectorAll(".sidebar-folder")).map((button) => button.dataset.path);
+  const hidden = hiddenPath ? [hiddenPath] : [];
+  try {
+    const response = await fetch("/api/sidebar/folders", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths, hidden }),
+    });
+    const data = await responseJson(response);
+    if (response.ok) {
+      sidebarState = data;
+      renderSidebarFolders(data.folders || []);
+    }
+  } catch (error) {
+    logClientError("Could not save sidebar folders", error);
+  }
+}
+
+sidebarModes.forEach((button) => {
+  button.addEventListener("click", () => {
+    setMode(button.dataset.mode, button.dataset.path || "");
+  });
+  button.addEventListener("mouseenter", () => {
+    if (button.dataset.mode === "all") {
+      preloadFolderForNavigation(button.dataset.path || "");
+    } else if (button.dataset.mode !== "trash") {
+      fetchItems("", { force: false }).catch(() => {});
+    }
+  });
+});
+
+sidebarNewFolder?.addEventListener("click", () => setMode("all", ""));
+
+sidebarHideDrop?.addEventListener("dragover", (event) => {
+  if (!draggedItemPaths(event).length) {
+    return;
+  }
+  event.preventDefault();
+  sidebarHideDrop.classList.add("is-active");
+});
+
+sidebarHideDrop?.addEventListener("dragleave", () => {
+  sidebarHideDrop.classList.remove("is-active");
+});
+
+sidebarHideDrop?.addEventListener("drop", (event) => {
+  const [path] = draggedItemPaths(event);
+  if (!path) {
+    return;
+  }
+  event.preventDefault();
+  sidebarHideDrop.classList.remove("is-active");
+  saveSidebarFolders(path);
+});
+
+manageStorageButton?.addEventListener("click", () => {
+  closeSearchPanel();
+  closeAccountPanel();
+  closeSharePanel();
+  closeNotificationsPanel();
+  settingsPanel.hidden = false;
+  settingsToggle.setAttribute("aria-expanded", "true");
+  trashLimitInput?.focus();
+});
 
 function upsertCachedItem(folderPath, item, previousPath = item.path) {
   const data = itemCache.get(folderPath) || { items: [], path: folderPath, parent: uploadParentPath(folderPath) };
@@ -1769,7 +2032,20 @@ function renderItems(data) {
       actions.append(downloadLink);
     }
 
-    if (canEdit) {
+    if (canEdit && currentMode !== "trash") {
+      const favoriteButton = document.createElement("button");
+      favoriteButton.type = "button";
+      favoriteButton.className = "item-action-button favorite";
+      favoriteButton.textContent = item.favorite ? "★" : "☆";
+      favoriteButton.setAttribute("aria-label", `${item.favorite ? "Remove" : "Add"} ${item.name} ${item.favorite ? "from" : "to"} favorites`);
+      favoriteButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setFavorite(item.path, !item.favorite);
+      });
+      actions.append(favoriteButton);
+    }
+
+    if (canEdit && currentMode !== "trash") {
       const removeButton = document.createElement("button");
       removeButton.type = "button";
       removeButton.className = "item-action-button delete";
@@ -1824,8 +2100,18 @@ function renderItems(data) {
       preview.textContent = "·";
     }
 
+    if (item.favorite) {
+      const star = document.createElement("span");
+      star.className = "favorite-star";
+      star.textContent = "★";
+      preview.append(star);
+    }
+
     row.addEventListener("dblclick", (event) => {
       if (event.target.closest(".item-action-button, .item-action-link, .select-file-checkbox")) {
+        return;
+      }
+      if (currentMode === "trash") {
         return;
       }
       if (item.type === "folder") {
@@ -1949,6 +2235,68 @@ function showFilePreviewFallback(preview) {
   preview.classList.add("file");
   preview.textContent = "·";
 }
+
+async function setFavorite(path, favorite) {
+  try {
+    const response = await fetch("/api/items/favorite", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, favorite }),
+    });
+    const data = await responseJson(response);
+    if (!response.ok) {
+      status.textContent = data.message || "Could not update favorite.";
+      return false;
+    }
+    itemCache.clear();
+    await loadSidebar();
+    await loadItems({ force: true });
+    status.textContent = data.favorite ? "Added to favorites." : "Removed from favorites.";
+    return true;
+  } catch {
+    status.textContent = "Could not update favorite.";
+    return false;
+  }
+}
+
+favoriteCurrentButton?.addEventListener("click", () => {
+  if (currentMode !== "all" || !currentPath) {
+    status.textContent = "Open a folder to favorite it.";
+    return;
+  }
+  const currentData = itemCache.get(currentPath);
+  const isFavorite = currentData?.items?.some((item) => item.path === currentPath && item.favorite) || false;
+  setFavorite(currentPath, !isFavorite);
+});
+
+async function emptyTrash(anchor) {
+  if (!(await confirmDeleteAction({
+    anchor,
+    title: "Empty Trash?",
+    message: "Permanently delete everything in Trash?",
+    deleteLabel: "Empty Trash",
+  }))) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/trash", { method: "DELETE" });
+    const data = await responseJson(response);
+    if (!response.ok) {
+      status.textContent = data.message || "Could not empty Trash.";
+      return;
+    }
+    itemCache.delete("trash:");
+    status.textContent = `Emptied Trash (${data.deleted || 0} item${data.deleted === 1 ? "" : "s"}).`;
+    if (currentMode === "trash") {
+      await loadItems({ force: true });
+    }
+    scheduleStorageUsageRefresh();
+  } catch {
+    status.textContent = "Could not empty Trash.";
+  }
+}
+
+emptyTrashSettings?.addEventListener("click", () => emptyTrash(emptyTrashSettings));
 
 async function saveVisibleOrder() {
   if (sortBy !== "manual") {
@@ -2081,8 +2429,11 @@ async function loadItems(options = {}) {
   lastSelectedPath = null;
   updateSelectionControls();
 
-  if (!options.force && itemCache.has(requestedPath)) {
-    renderItems(itemCache.get(requestedPath));
+  if (currentMode === "all" && !options.force && itemCache.has(requestedPath)) {
+    const cached = itemCache.get(requestedPath);
+    currentVirtualItems = cached.items || [];
+    updateFolderHeader(cached);
+    renderItems(cached);
     return;
   }
 
@@ -2093,6 +2444,8 @@ async function loadItems(options = {}) {
       return;
     }
 
+    currentVirtualItems = data.items || [];
+    updateFolderHeader(data);
     renderItems(data);
   } catch (error) {
     if (pendingChildren(requestedPath).length) {
@@ -2100,6 +2453,7 @@ async function loadItems(options = {}) {
     } else {
       status.textContent = error.message || "Could not load items.";
       showEmptyFileList();
+      updateFolderHeader({ items: [] });
     }
   }
 }

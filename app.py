@@ -71,6 +71,10 @@ STATIC_ASSET_VERSION = str(
         default=0,
     )
 )
+TRASH_DIRECTORY_NAME = ".filedrop_trash"
+DEFAULT_RECENT_DAYS = 7
+DEFAULT_TRASH_RETENTION_DAYS = 30
+DEFAULT_TRASH_LIMIT_BYTES = 15 * 1024 ** 3
 
 def utc_now():
     return datetime.now(timezone.utc)
@@ -152,6 +156,36 @@ def init_db():
                 CHECK (sort_by IN ('manual', 'name', 'modified', 'size', 'extension')),
             sort_direction TEXT NOT NULL DEFAULT 'asc' CHECK (sort_direction IN ('asc', 'desc'))
         );
+        CREATE TABLE IF NOT EXISTS favorites (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, path)
+        );
+        CREATE TABLE IF NOT EXISTS folder_usage (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            folder_path TEXT NOT NULL,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            last_used_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, folder_path)
+        );
+        CREATE TABLE IF NOT EXISTS sidebar_folders (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            folder_path TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            hidden INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, folder_path)
+        );
+        CREATE TABLE IF NOT EXISTS trash_items (
+            trash_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            original_path TEXT NOT NULL,
+            stored_path TEXT NOT NULL,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL CHECK (type IN ('file', 'folder')),
+            size INTEGER NOT NULL DEFAULT 0,
+            deleted_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS upload_receipts (
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             upload_id TEXT NOT NULL,
@@ -220,6 +254,12 @@ def init_db():
         db.execute("ALTER TABLE user_preferences ADD COLUMN sort_by TEXT NOT NULL DEFAULT 'manual'")
     if "sort_direction" not in preference_columns:
         db.execute("ALTER TABLE user_preferences ADD COLUMN sort_direction TEXT NOT NULL DEFAULT 'asc'")
+    if "recent_days" not in preference_columns:
+        db.execute(f"ALTER TABLE user_preferences ADD COLUMN recent_days INTEGER NOT NULL DEFAULT {DEFAULT_RECENT_DAYS}")
+    if "trash_retention_days" not in preference_columns:
+        db.execute(f"ALTER TABLE user_preferences ADD COLUMN trash_retention_days INTEGER NOT NULL DEFAULT {DEFAULT_TRASH_RETENTION_DAYS}")
+    if "trash_limit_bytes" not in preference_columns:
+        db.execute(f"ALTER TABLE user_preferences ADD COLUMN trash_limit_bytes INTEGER NOT NULL DEFAULT {DEFAULT_TRASH_LIMIT_BYTES}")
     parallel_upload_migration = "interactive_parallel_uploads_4"
     if not db.execute("SELECT 1 FROM app_migrations WHERE name = ?", (parallel_upload_migration,)).fetchone():
         db.execute(
@@ -237,6 +277,7 @@ def init_db():
             db.execute("UPDATE users SET is_initial_admin = 1 WHERE id = ?", (first_admin["id"],))
     db.execute("DELETE FROM sessions WHERE expires_at <= ?", (iso_time(utc_now()),))
     db.execute("DELETE FROM upload_receipts WHERE created_at <= ?", (iso_time(utc_now() - timedelta(hours=24)),))
+    cleanup_trash_for_all_users()
     db.commit()
 
 
@@ -485,12 +526,109 @@ def directory_size(path):
     return total
 
 
+def visible_user_items(folder):
+    return [item for item in folder.iterdir() if item.name != TRASH_DIRECTORY_NAME]
+
+
 def storage_usage_for_user(user):
     return directory_size(user_accessible_root(user))
 
 
 def user_id_value(user):
     return user["id"] if "id" in user.keys() else user["user_id"]
+
+
+def user_preferences_for_user(user):
+    db = get_db()
+    user_id = user_id_value(user)
+    db.execute("INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)", (user_id,))
+    row = db.execute("SELECT * FROM user_preferences WHERE user_id = ?", (user_id,)).fetchone()
+    return {
+        "theme": row["theme"],
+        "conflictMode": row["conflict_mode"],
+        "parallelUploads": row["parallel_uploads"],
+        "confirmSingleDelete": bool(row["confirm_single_delete"]),
+        "confirmBulkDelete": bool(row["confirm_bulk_delete"]),
+        "fullView": bool(row["full_view"]),
+        "sortBy": row["sort_by"],
+        "sortDirection": row["sort_direction"],
+        "recentDays": row["recent_days"],
+        "trashRetentionDays": row["trash_retention_days"],
+        "trashLimitBytes": row["trash_limit_bytes"],
+    }
+
+
+def trash_root_for_user(user):
+    root = user_accessible_root(user) / TRASH_DIRECTORY_NAME
+    root.mkdir(exist_ok=True)
+    return root
+
+
+def trash_usage_for_user(user):
+    row = get_db().execute(
+        "SELECT COALESCE(SUM(size), 0) AS size FROM trash_items WHERE user_id = ?",
+        (user_id_value(user),),
+    ).fetchone()
+    return int(row["size"] or 0)
+
+
+def remove_trash_row(user, row):
+    stored = user_accessible_root(user) / row["stored_path"]
+    if stored.exists():
+        shutil.rmtree(stored) if stored.is_dir() else stored.unlink()
+    get_db().execute("DELETE FROM trash_items WHERE trash_id = ? AND user_id = ?", (row["trash_id"], user_id_value(user)))
+
+
+def cleanup_trash_for_user(user, retention_days=None, limit_bytes=None):
+    preferences = user_preferences_for_user(user)
+    retention = max(1, int(retention_days or preferences["trashRetentionDays"]))
+    limit = max(0, int(limit_bytes if limit_bytes is not None else preferences["trashLimitBytes"]))
+    cutoff = iso_time(utc_now() - timedelta(days=retention))
+    db = get_db()
+    expired = db.execute(
+        "SELECT * FROM trash_items WHERE user_id = ? AND deleted_at <= ? ORDER BY deleted_at ASC",
+        (user_id_value(user), cutoff),
+    ).fetchall()
+    for row in expired:
+        remove_trash_row(user, row)
+    while trash_usage_for_user(user) > limit:
+        row = db.execute(
+            "SELECT * FROM trash_items WHERE user_id = ? ORDER BY deleted_at ASC LIMIT 1",
+            (user_id_value(user),),
+        ).fetchone()
+        if not row:
+            break
+        remove_trash_row(user, row)
+
+
+def cleanup_trash_for_all_users():
+    for user in get_db().execute("SELECT * FROM users"):
+        cleanup_trash_for_user(user)
+
+
+def favorite_paths(user=None):
+    user = user or g.user
+    return {
+        row["path"]
+        for row in get_db().execute("SELECT path FROM favorites WHERE user_id = ?", (user_id_value(user),))
+    }
+
+
+def with_favorites(items, favorites=None):
+    favorites = favorites if favorites is not None else favorite_paths()
+    return [{**item, "favorite": item["path"] in favorites} for item in items]
+
+
+def record_folder_use(path):
+    if not g.user or path is None:
+        return
+    get_db().execute(
+        """INSERT INTO folder_usage (user_id, folder_path, use_count, last_used_at)
+           VALUES (?, ?, 1, ?)
+           ON CONFLICT(user_id, folder_path)
+           DO UPDATE SET use_count = use_count + 1, last_used_at = excluded.last_used_at""",
+        (g.user["user_id"], path, iso_time(utc_now())),
+    )
 
 
 def storage_payload_for_user(user):
@@ -692,7 +830,8 @@ def ordered_items(folder, root=None, user_id=None):
                 (user_id, folder_path),
             )
         }
-    items = [item_payload(path, root=root) for path in folder.iterdir()]
+    paths = visible_user_items(folder) if g.user and root == user_accessible_root(g.user) else list(folder.iterdir())
+    items = [item_payload(path, root=root) for path in paths]
     return sorted(items, key=lambda item: (positions.get(item["path"], len(positions)), item["name"].casefold()))
 
 
@@ -749,6 +888,28 @@ def execute_item_moves(moves, replace_existing=False):
         item_path.rename(destination)
         moved += 1
     return moved
+
+
+def move_item_to_trash(user, item_path):
+    user_root = user_accessible_root(user)
+    relative_path = item_path.relative_to(user_root).as_posix()
+    size = directory_size(item_path) if item_path.is_dir() else item_path.stat().st_size
+    item_type = "folder" if item_path.is_dir() else "file"
+    db = get_db()
+    now = iso_time(utc_now())
+    cursor = db.execute(
+        """INSERT INTO trash_items (user_id, original_path, stored_path, name, type, size, deleted_at)
+           VALUES (?, ?, '', ?, ?, ?, ?)""",
+        (user_id_value(user), relative_path, item_path.name, item_type, size, now),
+    )
+    stored = trash_root_for_user(user) / f"{cursor.lastrowid}_{item_path.name}"
+    stored_path = stored.relative_to(user_root).as_posix()
+    item_path.rename(stored)
+    db.execute("UPDATE trash_items SET stored_path = ? WHERE trash_id = ?", (stored_path, cursor.lastrowid))
+    delete_search_records(user, relative_path)
+    db.execute("DELETE FROM favorites WHERE user_id = ? AND (path = ? OR path LIKE ?)", (user_id_value(user), relative_path, f"{relative_path}/%"))
+    cleanup_trash_for_user(user)
+    return relative_path
 
 
 def get_share(token):
@@ -982,20 +1143,9 @@ def render_share_browser(token, relative_path=""):
 
 
 def user_preferences():
-    db = get_db()
-    db.execute("INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)", (g.user["user_id"],))
-    db.commit()
-    row = db.execute("SELECT * FROM user_preferences WHERE user_id = ?", (g.user["user_id"],)).fetchone()
-    return {
-        "theme": row["theme"],
-        "conflictMode": row["conflict_mode"],
-        "parallelUploads": row["parallel_uploads"],
-        "confirmSingleDelete": bool(row["confirm_single_delete"]),
-        "confirmBulkDelete": bool(row["confirm_bulk_delete"]),
-        "fullView": bool(row["full_view"]),
-        "sortBy": row["sort_by"],
-        "sortDirection": row["sort_direction"],
-    }
+    preferences = user_preferences_for_user(g.user)
+    get_db().commit()
+    return preferences
 
 
 @app.errorhandler(HTTPException)
@@ -1263,7 +1413,7 @@ def storage_usage():
 @login_required
 def update_preferences():
     data = request.get_json(silent=True) or {}
-    if set(data) - {"theme", "conflictMode", "parallelUploads", "confirmSingleDelete", "confirmBulkDelete", "fullView", "sortBy", "sortDirection"}:
+    if set(data) - {"theme", "conflictMode", "parallelUploads", "confirmSingleDelete", "confirmBulkDelete", "fullView", "sortBy", "sortDirection", "recentDays", "trashRetentionDays", "trashLimitBytes"}:
         abort(400, description="Unknown preference.")
     preferences = user_preferences()
     preferences.update(data)
@@ -1284,11 +1434,17 @@ def update_preferences():
         abort(400, description="Choose a valid file sort option.")
     if preferences["sortDirection"] not in {"asc", "desc"}:
         abort(400, description="Choose a valid sort direction.")
+    for name in {"recentDays", "trashRetentionDays"}:
+        if not isinstance(preferences[name], int) or isinstance(preferences[name], bool) or not 1 <= preferences[name] <= 365:
+            abort(400, description=f"{name} must be between 1 and 365 days.")
+    if not isinstance(preferences["trashLimitBytes"], int) or isinstance(preferences["trashLimitBytes"], bool) or preferences["trashLimitBytes"] < 0:
+        abort(400, description="Trash storage limit must be zero or higher.")
     get_db().execute(
         """UPDATE user_preferences
            SET theme = ?, conflict_mode = ?, parallel_uploads = ?,
                confirm_single_delete = ?, confirm_bulk_delete = ?, full_view = ?,
-               sort_by = ?, sort_direction = ?
+               sort_by = ?, sort_direction = ?, recent_days = ?,
+               trash_retention_days = ?, trash_limit_bytes = ?
            WHERE user_id = ?""",
         (
             preferences["theme"],
@@ -1299,9 +1455,13 @@ def update_preferences():
             preferences["fullView"],
             preferences["sortBy"],
             preferences["sortDirection"],
+            preferences["recentDays"],
+            preferences["trashRetentionDays"],
+            preferences["trashLimitBytes"],
             g.user["user_id"],
         ),
     )
+    cleanup_trash_for_user(g.user, preferences["trashRetentionDays"], preferences["trashLimitBytes"])
     get_db().commit()
     return jsonify(preferences)
 
@@ -1467,7 +1627,153 @@ def items():
     if not folder.exists() or not folder.is_dir():
         abort(404, description="Folder was not found.")
     parent_path = folder.parent.relative_to(root).as_posix() if folder != root else ""
-    return jsonify({"items": ordered_items(folder), "parent": "" if parent_path == "." else parent_path, "path": "" if folder == root else folder.relative_to(root).as_posix()})
+    current = "" if folder == root else folder.relative_to(root).as_posix()
+    record_folder_use(current)
+    get_db().commit()
+    return jsonify({"items": with_favorites(ordered_items(folder)), "parent": "" if parent_path == "." else parent_path, "path": current})
+
+
+def item_from_record(row):
+    path = resolve_upload_path(row["path"])
+    if not path.exists() or path.name == TRASH_DIRECTORY_NAME:
+        return None
+    return item_payload(path)
+
+
+@app.get("/api/items/recent")
+@login_required
+def recent_items():
+    days = request.args.get("days", user_preferences()["recentDays"])
+    try:
+        days = max(1, min(365, int(days)))
+    except (TypeError, ValueError):
+        abort(400, description="Recent time period must be a number of days.")
+    cutoff = (utc_now() - timedelta(days=days)).timestamp()
+    ensure_search_index(g.user)
+    rows = get_db().execute(
+        """SELECT * FROM file_records
+           WHERE user_id = ? AND path != '' AND modified_at >= ? AND path NOT LIKE ?
+           ORDER BY modified_at DESC
+           LIMIT 200""",
+        (g.user["user_id"], cutoff, f"{TRASH_DIRECTORY_NAME}/%"),
+    ).fetchall()
+    items = [item for row in rows if (item := item_from_record(row))]
+    return jsonify({"items": with_favorites(items), "path": "__recents__", "parent": ""})
+
+
+@app.get("/api/items/favorites")
+@login_required
+def favorite_items():
+    items = []
+    for row in get_db().execute("SELECT path FROM favorites WHERE user_id = ? ORDER BY created_at DESC", (g.user["user_id"],)):
+        path = resolve_upload_path(row["path"])
+        if path.exists():
+            items.append(item_payload(path))
+    return jsonify({"items": with_favorites(items, {item["path"] for item in items}), "path": "__favorites__", "parent": ""})
+
+
+@app.patch("/api/items/favorite")
+@login_required
+def toggle_favorite():
+    data = request.get_json(silent=True) or {}
+    item_path = resolve_upload_path(data.get("path", ""))
+    if item_path == accessible_root() or not item_path.exists():
+        abort(404, description="File or folder was not found.")
+    relative_path = item_path.relative_to(accessible_root()).as_posix()
+    favorite = data.get("favorite")
+    db = get_db()
+    if favorite is False:
+        db.execute("DELETE FROM favorites WHERE user_id = ? AND path = ?", (g.user["user_id"], relative_path))
+        is_favorite = False
+    else:
+        db.execute(
+            "INSERT OR IGNORE INTO favorites (user_id, path, created_at) VALUES (?, ?, ?)",
+            (g.user["user_id"], relative_path, iso_time(utc_now())),
+        )
+        is_favorite = True
+    db.commit()
+    return jsonify({"path": relative_path, "favorite": is_favorite})
+
+
+@app.get("/api/sidebar")
+@login_required
+def sidebar():
+    root = accessible_root()
+    favorite = favorite_paths()
+    shared = [
+        {
+            **item_payload(root / row["root_path"] if row["root_path"] else root),
+            "token": row["token"],
+            "url": url_for("share_browse_root", token=row["token"]),
+        }
+        for row in get_db().execute(
+            "SELECT token, root_path FROM share_links WHERE owner_id = ? ORDER BY created_at DESC",
+            (g.user["user_id"],),
+        )
+        if (root / row["root_path"] if row["root_path"] else root).exists()
+    ]
+    top_folders = [item_payload(path) for path in visible_user_items(root) if path.is_dir()]
+    sidebar_rows = {
+        row["folder_path"]: row
+        for row in get_db().execute("SELECT * FROM sidebar_folders WHERE user_id = ?", (g.user["user_id"],))
+    }
+
+    def folder_rank(item):
+        row = sidebar_rows.get(item["path"])
+        usage = get_db().execute(
+            "SELECT use_count, last_used_at FROM folder_usage WHERE user_id = ? AND folder_path = ?",
+            (g.user["user_id"], item["path"]),
+        ).fetchone()
+        hidden = row["hidden"] if row else 0
+        manual = row["position"] if row and not hidden else 10_000
+        use_count = usage["use_count"] if usage else 0
+        last_used = usage["last_used_at"] if usage else ""
+        return (hidden, manual, -use_count, last_used, item["name"].casefold())
+
+    visible_folders = [
+        item for item in sorted(top_folders, key=folder_rank)
+        if not (sidebar_rows.get(item["path"]) and sidebar_rows[item["path"]]["hidden"])
+    ]
+    return jsonify({
+        "shared": with_favorites(shared, favorite),
+        "folders": with_favorites(visible_folders[:8], favorite),
+    })
+
+
+@app.put("/api/sidebar/folders")
+@login_required
+def update_sidebar_folders():
+    data = request.get_json(silent=True) or {}
+    paths = data.get("paths", [])
+    hidden = data.get("hidden", [])
+    if not isinstance(paths, list) or not isinstance(hidden, list):
+        abort(400, description="Sidebar folders must be lists.")
+    root = accessible_root()
+    db = get_db()
+    for index, path in enumerate(paths):
+        folder = resolve_upload_path(path)
+        if folder == root or not folder.exists() or not folder.is_dir():
+            abort(404, description="Folder was not found.")
+        db.execute(
+            """INSERT INTO sidebar_folders (user_id, folder_path, position, hidden)
+               VALUES (?, ?, ?, 0)
+               ON CONFLICT(user_id, folder_path)
+               DO UPDATE SET position = excluded.position, hidden = 0""",
+            (g.user["user_id"], path, index),
+        )
+    for path in hidden:
+        folder = resolve_upload_path(path)
+        if folder == root or not folder.exists() or not folder.is_dir():
+            continue
+        db.execute(
+            """INSERT INTO sidebar_folders (user_id, folder_path, position, hidden)
+               VALUES (?, ?, 10000, 1)
+               ON CONFLICT(user_id, folder_path)
+               DO UPDATE SET hidden = 1""",
+            (g.user["user_id"], path),
+        )
+    db.commit()
+    return sidebar()
 
 
 @app.get("/api/search")
@@ -1860,15 +2166,51 @@ def reorder_shared_items(token):
     return jsonify({"ordered": len(item_paths)})
 
 
+@app.get("/api/trash")
+@login_required
+def trash_items():
+    cleanup_trash_for_user(g.user)
+    get_db().commit()
+    rows = get_db().execute(
+        "SELECT * FROM trash_items WHERE user_id = ? ORDER BY deleted_at DESC LIMIT 300",
+        (g.user["user_id"],),
+    ).fetchall()
+    return jsonify({
+        "items": [
+            {
+                "trashId": row["trash_id"],
+                "name": row["name"],
+                "path": row["original_path"],
+                "type": row["type"],
+                "size": row["size"],
+                "deletedAt": row["deleted_at"],
+                "modifiedAt": datetime.fromisoformat(row["deleted_at"]).timestamp(),
+            }
+            for row in rows
+        ],
+        "usageBytes": trash_usage_for_user(g.user),
+        "path": "__trash__",
+        "parent": "",
+    })
+
+
+@app.delete("/api/trash")
+@login_required
+def empty_trash():
+    rows = get_db().execute("SELECT * FROM trash_items WHERE user_id = ?", (g.user["user_id"],)).fetchall()
+    for row in rows:
+        remove_trash_row(g.user, row)
+    get_db().commit()
+    return jsonify({"deleted": len(rows)})
+
+
 @app.delete("/api/items")
 @login_required
 def delete_item():
     item_path = resolve_upload_path(request.args.get("path", ""))
     if item_path == accessible_root() or not item_path.exists():
         abort(404, description="File or folder was not found.")
-    relative_path = item_path.relative_to(accessible_root()).as_posix()
-    shutil.rmtree(item_path) if item_path.is_dir() else item_path.unlink()
-    delete_search_records(g.user, relative_path)
+    move_item_to_trash(g.user, item_path)
     get_db().commit()
     return Response(status=204)
 
@@ -1881,9 +2223,7 @@ def delete_shared_item(token):
     if item_path == root or not item_path.exists():
         abort(404, description="File or folder was not found.")
     owner = get_db().execute("SELECT * FROM users WHERE id = ?", (share["owner_id"],)).fetchone()
-    relative_path = item_path.relative_to(user_accessible_root(owner)).as_posix()
-    shutil.rmtree(item_path) if item_path.is_dir() else item_path.unlink()
-    delete_search_records(owner, relative_path)
+    move_item_to_trash(owner, item_path)
     get_db().commit()
     return Response(status=204)
 

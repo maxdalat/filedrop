@@ -71,3 +71,6 @@ For a non-Docker deployment, runtime directories can be moved with:
 FILEDROP_INSTANCE_PATH=/secure/path/filedrop-instance
 FILEDROP_UPLOAD_PATH=/data/filedrop-uploads
 ```
+
+
+SHADNC PRESET: --preset b2oFIH0S0
