@@ -354,7 +354,10 @@ def prevent_api_html_redirects(response):
             message = "Change your password before using Filedrop."
         replacement = jsonify({"message": message, "redirect": location})
         replacement.status_code = 401 if "login" in location else 403
+        replacement.headers["Cache-Control"] = "no-store"
         return replacement
+    if request.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 

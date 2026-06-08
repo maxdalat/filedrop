@@ -182,6 +182,7 @@ let sortBy = ["manual", "name", "modified", "size", "extension"].includes(accoun
 let sortDirection = accountPreferences.sortDirection === "desc" ? "desc" : "asc";
 const itemCache = new Map();
 const pendingItemLoads = new Map();
+const deletePreviewCache = new Map();
 const prefetchedFolderPages = new Set();
 const pendingUploadItems = new Map();
 let activeUploadRun;
@@ -800,6 +801,9 @@ async function removeCurrentShare() {
   }
 }
 
+deleteSelectedButton.addEventListener("mouseenter", () => prepareDeletePreview(Array.from(selectedItems)));
+deleteSelectedButton.addEventListener("focus", () => prepareDeletePreview(Array.from(selectedItems)));
+deleteSelectedButton.addEventListener("pointerdown", () => prepareDeletePreview(Array.from(selectedItems)));
 deleteSelectedButton.addEventListener("click", () => {
   deleteSelectedItems(deleteSelectedButton);
 });
@@ -1002,7 +1006,12 @@ function showContextMenu(item, x, y) {
 
   if (item && canEdit) {
     actions.push({ label: "Rename", action: (button) => { openRenamePopover(button, item); } });
-    actions.push({ label: "Delete", action: (button) => { deleteItem(item, button); }, className: "delete" });
+    actions.push({
+      label: "Delete",
+      action: (button) => { deleteItem(item, button); },
+      preload: () => prepareDeletePreview([item.path]),
+      className: "delete",
+    });
   }
 
   if (!actions.length) {
@@ -1014,6 +1023,11 @@ function showContextMenu(item, x, y) {
     button.type = "button";
     button.textContent = action.label;
     button.className = action.className || "";
+    if (action.preload) {
+      button.addEventListener("mouseenter", action.preload);
+      button.addEventListener("focus", action.preload);
+      button.addEventListener("pointerdown", action.preload);
+    }
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       action.action(button);
@@ -1105,7 +1119,7 @@ async function fetchItems(path, options = {}) {
     return pendingItemLoads.get(path);
   }
 
-  const request = fetch(itemRequestUrl(path))
+  const request = fetch(itemRequestUrl(path), { cache: force ? "no-store" : "default" })
     .then(async (response) => {
       const data = await responseJson(response);
 
@@ -1204,11 +1218,84 @@ function preloadFolderForHover(path) {
 
 function invalidateFolder(path) {
   itemCache.delete(path || "");
+  Array.from(deletePreviewCache.keys()).forEach((key) => {
+    if (key.startsWith(`${path || ""}\n`)) {
+      deletePreviewCache.delete(key);
+    }
+  });
 }
 
 function uploadParentPath(path) {
   const segments = path ? path.split("/") : [];
   return segments.slice(0, -1).join("/");
+}
+
+function deletePreviewKey(folderPath, paths) {
+  return `${folderPath || ""}\n${[...paths].sort().join("\n")}`;
+}
+
+function itemMatchesDeletedPath(itemPath, deletedPath) {
+  return itemPath === deletedPath || itemPath.startsWith(`${deletedPath}/`);
+}
+
+function buildDeletePreview(folderPath, paths) {
+  const source = itemCache.get(folderPath);
+  if (!source) {
+    return null;
+  }
+  return {
+    ...source,
+    items: source.items.filter((item) => !paths.some((path) => itemMatchesDeletedPath(item.path, path))),
+  };
+}
+
+function prepareDeletePreview(paths, folderPath = currentPath) {
+  const normalizedPaths = [...new Set(paths.filter(Boolean))];
+  if (!normalizedPaths.length) {
+    return;
+  }
+  prefetchFolderPage(folderPath);
+  const key = deletePreviewKey(folderPath, normalizedPaths);
+  if (!deletePreviewCache.has(key)) {
+    const preview = buildDeletePreview(folderPath, normalizedPaths);
+    if (preview) {
+      deletePreviewCache.set(key, preview);
+    }
+  }
+}
+
+function preparedDeletePreview(paths, folderPath = currentPath) {
+  const normalizedPaths = [...new Set(paths.filter(Boolean))];
+  return deletePreviewCache.get(deletePreviewKey(folderPath, normalizedPaths)) || buildDeletePreview(folderPath, normalizedPaths);
+}
+
+function renderDeletePreview(paths, folderPath = currentPath) {
+  const preview = preparedDeletePreview(paths, folderPath);
+  if (!preview || folderPath !== currentPath) {
+    return false;
+  }
+  itemCache.set(folderPath, preview);
+  selectedItems = new Set(Array.from(selectedItems).filter((path) => !paths.some((deletedPath) => itemMatchesDeletedPath(path, deletedPath))));
+  list.innerHTML = "";
+  list.className = "";
+  renderItems(preview);
+  return true;
+}
+
+async function refreshFolderFromServer(folderPath) {
+  try {
+    const data = await fetchItems(folderPath, { force: true });
+    if (folderPath !== currentPath) {
+      return;
+    }
+    list.innerHTML = "";
+    list.className = "";
+    renderItems(data);
+  } catch (error) {
+    logClientError("Could not refresh folder after delete", error, {
+      folderPath,
+    });
+  }
 }
 
 function pendingChildren(path) {
@@ -1351,6 +1438,11 @@ function renderItems(data) {
       removeButton.className = "item-action-button delete";
       removeButton.textContent = "×";
       removeButton.setAttribute("aria-label", `${item.pendingUpload ? "Cancel upload" : "Delete"} ${item.name}`);
+      if (!item.pendingUpload) {
+        removeButton.addEventListener("mouseenter", () => prepareDeletePreview([item.path]));
+        removeButton.addEventListener("focus", () => prepareDeletePreview([item.path]));
+        removeButton.addEventListener("pointerdown", () => prepareDeletePreview([item.path]));
+      }
       removeButton.addEventListener("click", (event) => {
         event.stopPropagation();
         if (item.pendingUpload) {
@@ -1967,6 +2059,9 @@ async function deleteItem(item, anchor) {
     return;
   }
 
+  const deletedPath = item.path;
+  const folderPath = currentPath;
+  prepareDeletePreview([deletedPath], folderPath);
   const result = await deleteItemRequest(item.path);
 
   if (!result.ok) {
@@ -1974,12 +2069,15 @@ async function deleteItem(item, anchor) {
     return;
   }
 
-  status.textContent = `Deleted ${item.name}.`;
-  invalidateFolder(currentPath);
-  invalidateFolder(item.path);
-  selectedItems.delete(item.path);
+  if (!renderDeletePreview([deletedPath], folderPath)) {
+    invalidateFolder(folderPath);
+    selectedItems.delete(deletedPath);
+    updateSelectionControls();
+  }
+  invalidateFolder(deletedPath);
   updateSelectionControls();
-  await loadItems({ force: true });
+  status.textContent = `Deleted ${item.name}.`;
+  refreshFolderFromServer(folderPath);
 }
 
 async function deleteSelectedItems(anchor) {
@@ -1996,14 +2094,18 @@ async function deleteSelectedItems(anchor) {
   deleteSelectedButton.disabled = true;
   deleteSelectedButton.textContent = "Deleting...";
 
+  const folderPath = currentPath;
+  prepareDeletePreview(items, folderPath);
   let deleted = 0;
   let failed = 0;
+  const deletedPaths = [];
 
   for (const path of items) {
     const result = await deleteItemRequest(path);
 
     if (result.ok) {
       deleted += 1;
+      deletedPaths.push(path);
       invalidateFolder(path);
     } else {
       failed += 1;
@@ -2011,15 +2113,20 @@ async function deleteSelectedItems(anchor) {
     }
   }
 
-  invalidateFolder(currentPath);
-  selectedItems = new Set();
+  if (deletedPaths.length && !renderDeletePreview(deletedPaths, folderPath)) {
+    invalidateFolder(folderPath);
+    selectedItems = new Set(Array.from(selectedItems).filter((path) => !deletedPaths.some((deletedPath) => itemMatchesDeletedPath(path, deletedPath))));
+    updateSelectionControls();
+  }
   status.textContent = failed
     ? `Deleted ${deleted} item${deleted === 1 ? "" : "s"}; ${failed} failed.`
     : `Deleted ${deleted} item${deleted === 1 ? "" : "s"}.`;
 
   deleteSelectedButton.textContent = "Delete selected";
   updateSelectionControls();
-  await loadItems({ force: true });
+  if (deletedPaths.length) {
+    refreshFolderFromServer(folderPath);
+  }
 }
 
 function joinUploadPath(...parts) {
