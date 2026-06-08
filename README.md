@@ -2,23 +2,40 @@
 
 Secured Flask file browser with account requests, administrator approval, per-user home folders, and administrator access to the shared upload root.
 
-Passwords are stored as salted `scrypt` hashes. Sessions are server-side records handed to the browser as opaque, HttpOnly cookies signed with a runtime-generated RSA keypair. Runtime state belongs in `instance/`, and uploaded files belong in `uploads/`.
+Passwords are stored as salted `scrypt` hashes. Sessions are server-side records handed to the browser as opaque, HttpOnly cookies signed with a runtime-generated RSA keypair. Local runtime state belongs in `instance/`, and local uploaded files belong in `uploads/`. Docker deployments store both under `/data` so the container can be replaced without deleting user data.
 
 ## Run with Docker
 
-Persist both runtime directories:
+Persist `/data` outside the container:
 
 ```sh
 docker build -t filedrop .
 docker run --rm -p 8000:8000 \
-  -v filedrop-instance:/app/instance \
-  -v filedrop-uploads:/app/uploads \
+  -v filedrop-data:/data \
   filedrop
 ```
 
 Open <http://localhost:8000>. On a fresh installation, the first visitor is redirected to a one-time setup page to choose the initial administrator username, email address, and password.
 
+You can also use Docker Compose:
+
+```sh
+docker compose up --build
+```
+
 The Docker image runs Gunicorn with threaded request handling so uploads do not block folder browsing, downloads, or page reloads.
+
+## Coolify Persistence
+
+Filedrop follows the same deployment pattern as apps like Immich: the Docker image is disposable, and user data lives in persistent storage mounted into the container.
+
+In Coolify, add persistent storage for the app:
+
+- Mount path: `/data`
+- Contents: SQLite database, session signing keys, and uploaded files
+- Keep this storage when redeploying or rebuilding the app
+
+Redeploying the app should not delete files as long as the same persistent storage remains attached. Deleting the Coolify persistent storage volume, changing the mount path, or deploying without the `/data` mount will create a fresh empty install.
 
 The image includes a Docker health check for Coolify. It probes `/api/health` every 10 seconds and reports live container health after verifying SQLite access and the writable upload directory. Coolify will surface the health state automatically when health checks are enabled for the application.
 

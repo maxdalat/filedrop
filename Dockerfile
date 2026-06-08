@@ -2,6 +2,8 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV FILEDROP_INSTANCE_PATH=/data/instance
+ENV FILEDROP_UPLOAD_PATH=/data/uploads
 
 WORKDIR /app
 
@@ -9,6 +11,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
+RUN mkdir -p /data/instance /data/uploads
+VOLUME ["/data"]
 
 EXPOSE 8000
 

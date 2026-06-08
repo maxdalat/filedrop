@@ -62,7 +62,7 @@ DATABASE = Path(app.instance_path) / DATABASE_FILENAME
 PRIVATE_KEY_PATH = Path(app.instance_path) / PRIVATE_KEY_FILENAME
 PUBLIC_KEY_PATH = Path(app.instance_path) / PUBLIC_KEY_FILENAME
 UPLOAD_ROOT = Path(env_value(UPLOAD_PATH_ENV, Path(app.root_path) / DEFAULT_UPLOAD_DIRECTORY)).resolve()
-UPLOAD_ROOT.mkdir(exist_ok=True)
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
 def utc_now():
     return datetime.now(timezone.utc)
@@ -768,6 +768,14 @@ def handle_http_error(error):
     if request.path.startswith("/api/"):
         return jsonify({"message": error.description}), error.code
     return render_template("message.html", title=f"Error {error.code}", message=error.description), error.code
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    app.logger.exception("Unhandled application error")
+    if request.path.startswith("/api/"):
+        return jsonify({"message": "The server hit an unexpected error.", "error": error.__class__.__name__}), 500
+    return render_template("message.html", title="Error 500", message="The server hit an unexpected error."), 500
 
 
 @app.get("/setup")

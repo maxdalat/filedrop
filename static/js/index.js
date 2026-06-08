@@ -4,6 +4,104 @@ const shareContext = window.FILEDROP_SHARE_CONTEXT || null;
 const isShareMode = Boolean(shareContext?.token);
 const canEdit = !isShareMode || shareContext.canEdit === true;
 const rootLabel = document.body.dataset.rootLabel || "Files";
+
+function elementLabel(element) {
+  if (!element || element === window) {
+    return "window";
+  }
+  if (element === document) {
+    return "document";
+  }
+  const parts = [element.tagName?.toLowerCase()].filter(Boolean);
+  if (element.id) {
+    parts.push(`#${element.id}`);
+  }
+  if (element.classList?.length) {
+    parts.push(`.${Array.from(element.classList).join(".")}`);
+  }
+  if (element.getAttribute?.("aria-label")) {
+    parts.push(`[aria-label="${element.getAttribute("aria-label")}"]`);
+  } else if (element.textContent?.trim()) {
+    parts.push(`[text="${element.textContent.trim().slice(0, 80)}"]`);
+  }
+  return parts.join("");
+}
+
+function logClientError(message, error, context = {}) {
+  const details = {
+    path: document.body.dataset.currentPath || "",
+    url: window.location.href,
+    shareMode: isShareMode,
+    ...context,
+  };
+  if (console.groupCollapsed) {
+    console.groupCollapsed(`[Filedrop] ${message}`);
+    console.error(error);
+    console.info("Context", details);
+    console.groupEnd();
+    return;
+  }
+  console.error(`[Filedrop] ${message}`, error, details);
+}
+
+window.addEventListener("error", (event) => {
+  logClientError("Unhandled JavaScript error", event.error || event.message, {
+    source: event.filename,
+    line: event.lineno,
+    column: event.colno,
+  });
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  logClientError("Unhandled promise rejection", event.reason || "Promise rejected without a reason.");
+});
+
+const originalAddEventListener = EventTarget.prototype.addEventListener;
+const wrappedListeners = new WeakMap();
+const loggedEventTypes = new Set(["click", "submit", "change", "input", "keydown", "drop"]);
+
+function contextForEvent(target, type, event) {
+  return {
+    eventType: type,
+    listenerTarget: elementLabel(target),
+    eventTarget: elementLabel(event?.target),
+  };
+}
+
+function wrappedEventListener(target, type, listener) {
+  if (!loggedEventTypes.has(type) || typeof listener !== "function") {
+    return listener;
+  }
+  let wrappersByType = wrappedListeners.get(listener);
+  if (!wrappersByType) {
+    wrappersByType = new Map();
+    wrappedListeners.set(listener, wrappersByType);
+  }
+  if (wrappersByType.has(type)) {
+    return wrappersByType.get(type);
+  }
+  const wrapper = function loggedUiAction(...args) {
+    try {
+      const result = listener.apply(this, args);
+      if (result && typeof result.catch === "function") {
+        result.catch((error) => {
+          logClientError("UI action failed", error, contextForEvent(target, type, args[0]));
+        });
+      }
+      return result;
+    } catch (error) {
+      logClientError("UI action failed", error, contextForEvent(target, type, args[0]));
+      throw error;
+    }
+  };
+  wrappersByType.set(type, wrapper);
+  return wrapper;
+}
+
+EventTarget.prototype.addEventListener = function addLoggedEventListener(type, listener, options) {
+  return originalAddEventListener.call(this, type, wrappedEventListener(this, type, listener), options);
+};
+
 const originalFetch = window.fetch.bind(window);
 window.fetch = async (resource, options = {}) => {
   const method = (options.method || "GET").toUpperCase();
@@ -12,16 +110,54 @@ window.fetch = async (resource, options = {}) => {
     options.headers = new Headers(options.headers || {});
     options.headers.set("X-CSRF-Token", csrfToken);
   }
-  const response = await originalFetch(resource, options);
+  let response;
+  try {
+    response = await originalFetch(resource, options);
+  } catch (error) {
+    logClientError("API request failed before the server responded", error, {
+      method,
+      requestPath: url.pathname,
+    });
+    throw error;
+  }
   if (url.origin === window.location.origin && url.pathname.startsWith("/api/")) {
     const contentType = response.headers.get("Content-Type") || "";
     if (response.redirected || contentType.includes("text/html")) {
       const message = response.redirected
         ? "Sign in again before using Filedrop."
         : `The server returned a page instead of data for ${url.pathname}.`;
+      logClientError("API returned an unexpected page response", new Error(message), {
+        method,
+        requestPath: url.pathname,
+        status: response.status,
+        contentType,
+        redirected: response.redirected,
+      });
       return new Response(JSON.stringify({ message }), {
         status: response.redirected ? 401 : (response.status || 500),
         headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (!response.ok) {
+      response.clone().text().then((body) => {
+        let parsedBody = body;
+        try {
+          parsedBody = body ? JSON.parse(body) : {};
+        } catch {
+          parsedBody = body.slice(0, 1000);
+        }
+        logClientError("API request returned an error", new Error(`${method} ${url.pathname} returned ${response.status}`), {
+          method,
+          requestPath: url.pathname,
+          status: response.status,
+          response: parsedBody,
+        });
+      }).catch((error) => {
+        logClientError("Could not read failed API response", error, {
+          method,
+          requestPath: url.pathname,
+          status: response.status,
+        });
       });
     }
   }
@@ -207,6 +343,11 @@ async function responseJson(response) {
     return JSON.parse(text);
   } catch {
     const url = response.url ? new URL(response.url, window.location.href).pathname : "the API";
+    logClientError("API response was not valid JSON", new Error(`Could not parse JSON from ${url}`), {
+      requestPath: url,
+      status: response.status,
+      response: text.slice(0, 1000),
+    });
     return {
       htmlResponse: true,
       message: response.ok
@@ -824,6 +965,7 @@ function navigateToFolder(path) {
     return;
   }
   currentPath = path;
+  document.body.dataset.currentPath = currentPath;
   window.history.pushState({ path }, "", folderUrl(path));
   loadCurrentShare();
   loadItems();
@@ -2635,6 +2777,7 @@ document.addEventListener("contextmenu", (event) => {
 window.history.replaceState({ path: currentPath }, "", folderUrl(currentPath));
 window.addEventListener("popstate", (event) => {
   currentPath = event.state?.path || "";
+  document.body.dataset.currentPath = currentPath;
   loadCurrentShare();
   loadItems();
 });

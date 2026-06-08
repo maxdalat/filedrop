@@ -1,0 +1,14 @@
+services:
+  filedrop:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      FILEDROP_INSTANCE_PATH: /data/instance
+      FILEDROP_UPLOAD_PATH: /data/uploads
+    volumes:
+      - filedrop-data:/data
+    restart: unless-stopped
+
+volumes:
+  filedrop-data:
