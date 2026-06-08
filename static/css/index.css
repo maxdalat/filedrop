@@ -1278,6 +1278,83 @@ li.file-row.is-drop-target,
   color: #991b1b;
 }
 
+.page-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  background: rgb(15 23 42 / 46%);
+  backdrop-filter: saturate(80%) brightness(0.86);
+}
+
+.page-dim[hidden] {
+  display: none;
+}
+
+.delete-confirm-popover {
+  position: fixed;
+  z-index: 9;
+  width: min(92vw, 340px);
+  padding: 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgb(15 23 42 / 24%);
+}
+
+.delete-confirm-popover[hidden] {
+  display: none;
+}
+
+.delete-confirm-title {
+  margin-bottom: 5px;
+  color: #1f2933;
+  font-size: 1rem;
+  font-weight: 780;
+}
+
+.delete-confirm-message {
+  margin-bottom: 13px;
+  color: #64748b;
+  font-size: 0.9rem;
+  font-weight: 560;
+  line-height: 1.35;
+}
+
+.delete-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.delete-confirm-cancel {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #475569;
+}
+
+.delete-confirm-cancel:hover,
+.delete-confirm-cancel:focus-visible {
+  background: #f3f4f6;
+  box-shadow: none;
+  color: #1f2933;
+  transform: none;
+}
+
+.delete-confirm-delete {
+  min-width: 132px;
+  padding: 13px 18px;
+  background: #991b1b;
+  font-weight: 800;
+  box-shadow: 0 8px 18px rgb(153 27 27 / 20%);
+}
+
+.delete-confirm-delete:hover,
+.delete-confirm-delete:focus-visible {
+  background: #b91c1c;
+  box-shadow: 0 12px 24px rgb(153 27 27 / 28%);
+  transform: translateY(-1px) scale(1.03);
+}
+
 a {
   color: #14532d;
   font-weight: 600;
@@ -1458,13 +1535,22 @@ html[data-theme="dark"] .sort-button.is-active:not(:disabled):focus-visible {
 }
 
 html[data-theme="dark"] .folder-popover,
-html[data-theme="dark"] .rename-popover {
+html[data-theme="dark"] .rename-popover,
+html[data-theme="dark"] .delete-confirm-popover {
   border-color: #374151;
   background: #1f2937;
 }
 
 html[data-theme="dark"] .folder-popover label,
 html[data-theme="dark"] .rename-popover label {
+  color: #cbd5e1;
+}
+
+html[data-theme="dark"] .delete-confirm-title {
+  color: #f9fafb;
+}
+
+html[data-theme="dark"] .delete-confirm-message {
   color: #cbd5e1;
 }
 
@@ -1476,10 +1562,15 @@ html[data-theme="dark"] .rename-popover input {
 }
 
 html[data-theme="dark"] .folder-popover-cancel,
-html[data-theme="dark"] .rename-popover-cancel {
+html[data-theme="dark"] .rename-popover-cancel,
+html[data-theme="dark"] .delete-confirm-cancel {
   border-color: #4b5563;
   background: #111827;
   color: #cbd5e1;
+}
+
+html[data-theme="dark"] .page-dim {
+  background: rgb(3 7 18 / 58%);
 }
 
 html[data-theme="dark"] .clear-failed-button,

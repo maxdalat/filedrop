@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token }}">
     <title>Filedrop</title>
-    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
+    <script src="{{ url_for('static', filename='js/theme.js', v=static_asset_version) }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css', v=static_asset_version) }}">
     <link rel="prefetch" href="{{ url_for('change_password') }}">
   </head>
   <body class="{{ 'full-view' if preferences.fullView else '' }}" data-current-path="{{ current_path|default('', true) }}" data-root-label="{{ root_label }}">
@@ -94,12 +94,12 @@
               </div>
               <input type="range" id="parallel-uploads">
               <div class="setting-row">
-                <label for="confirm-single-delete">Confirm single deletes</label>
-                <input type="checkbox" id="confirm-single-delete" checked>
+                <label for="confirm-single-delete">Delete files without asking</label>
+                <input type="checkbox" id="confirm-single-delete">
               </div>
               <div class="setting-row">
-                <label for="confirm-bulk-delete">Confirm multiple deletes</label>
-                <input type="checkbox" id="confirm-bulk-delete" checked>
+                <label for="confirm-bulk-delete">Delete selected files without asking</label>
+                <input type="checkbox" id="confirm-bulk-delete">
               </div>
               <div class="setting-row">
                 <label for="full-view">Use full-width file view</label>
@@ -180,6 +180,15 @@
 
       <ul id="file-list"></ul>
       <div class="context-menu" id="context-menu" hidden></div>
+      <div class="page-dim" id="page-dim" hidden></div>
+      <div class="delete-confirm-popover" id="delete-confirm-popover" hidden>
+        <div class="delete-confirm-title" id="delete-confirm-title">Delete item?</div>
+        <div class="delete-confirm-message" id="delete-confirm-message"></div>
+        <div class="delete-confirm-actions">
+          <button class="delete-confirm-cancel" type="button" id="delete-confirm-cancel">Cancel</button>
+          <button class="delete-confirm-delete" type="button" id="delete-confirm-delete">Delete</button>
+        </div>
+      </div>
       <form class="folder-popover" id="folder-popover" hidden>
         <label for="folder-name-input" id="folder-popover-label">Create folder</label>
         <div class="folder-popover-controls">
@@ -200,7 +209,7 @@
 
     <script>window.FILEDROP_PREFERENCES = {{ preferences|tojson }};</script>
     <script>window.FILEDROP_SHARE_CONTEXT = {{ share|tojson }};</script>
-    <script src="{{ url_for('static', filename='js/config.js') }}" defer></script>
-    <script src="{{ url_for('static', filename='js/index.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/config.js', v=static_asset_version) }}" defer></script>
+    <script src="{{ url_for('static', filename='js/index.js', v=static_asset_version) }}" defer></script>
   </body>
 </html>

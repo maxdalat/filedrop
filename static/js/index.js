@@ -200,6 +200,12 @@ const selectionCount = document.querySelector("#selection-count");
 const deleteSelectedButton = document.querySelector("#delete-selected-button");
 const breadcrumbs = document.querySelector("#breadcrumbs");
 const contextMenu = document.querySelector("#context-menu");
+const pageDim = document.querySelector("#page-dim");
+const deleteConfirmPopover = document.querySelector("#delete-confirm-popover");
+const deleteConfirmTitle = document.querySelector("#delete-confirm-title");
+const deleteConfirmMessage = document.querySelector("#delete-confirm-message");
+const deleteConfirmCancel = document.querySelector("#delete-confirm-cancel");
+const deleteConfirmDelete = document.querySelector("#delete-confirm-delete");
 const accountToggle = document.querySelector("#account-toggle");
 const accountPanel = document.querySelector("#account-panel");
 const notificationsToggle = document.querySelector("#notifications-toggle");
@@ -364,8 +370,8 @@ parallelSlider.min = String(config.minParallelUploads);
 parallelSlider.max = String(config.maxParallelUploads);
 parallelSlider.value = String(parallelUploads);
 parallelValue.textContent = String(parallelUploads);
-confirmSingleDelete.checked = savedConfirmSingleDelete ?? true;
-confirmBulkDelete.checked = savedConfirmBulkDelete ?? true;
+confirmSingleDelete.checked = !(savedConfirmSingleDelete ?? false);
+confirmBulkDelete.checked = !(savedConfirmBulkDelete ?? false);
 themeSelect.value = ["light", "dark", "system"].includes(savedTheme) ? savedTheme : "system";
 conflictSelect.value = savedConflictMode === "replace" ? "replace" : "add";
 fullView.checked = accountPreferences.fullView === true;
@@ -488,12 +494,12 @@ parallelSlider.addEventListener("change", () => {
 */
 confirmSingleDelete.addEventListener("change", () => {
   localStorage.setItem(config.storageKeys.confirmSingleDelete, String(confirmSingleDelete.checked));
-  savePreference("confirmSingleDelete", confirmSingleDelete.checked);
+  savePreference("confirmSingleDelete", !confirmSingleDelete.checked);
 });
 
 confirmBulkDelete.addEventListener("change", () => {
   localStorage.setItem(config.storageKeys.confirmBulkDelete, String(confirmBulkDelete.checked));
-  savePreference("confirmBulkDelete", confirmBulkDelete.checked);
+  savePreference("confirmBulkDelete", !confirmBulkDelete.checked);
 });
 
 themeSelect.addEventListener("change", () => {
@@ -863,7 +869,7 @@ async function removeCurrentShare() {
 }
 
 deleteSelectedButton.addEventListener("click", () => {
-  deleteSelectedItems();
+  deleteSelectedItems(deleteSelectedButton);
 });
 
 selectAllCheckbox.addEventListener("change", () => {
@@ -977,6 +983,66 @@ function hideContextMenu() {
   contextMenu.innerHTML = "";
 }
 
+let activeDeleteConfirmation;
+
+function closeDeleteConfirmation(result = false) {
+  if (!activeDeleteConfirmation) {
+    return;
+  }
+  const { resolve } = activeDeleteConfirmation;
+  activeDeleteConfirmation = undefined;
+  if (deleteConfirmPopover) {
+    deleteConfirmPopover.hidden = true;
+  }
+  if (pageDim) {
+    pageDim.hidden = true;
+  }
+  resolve(result);
+}
+
+function positionDeleteConfirmation(anchor) {
+  if (!deleteConfirmPopover || !anchor) {
+    return;
+  }
+  const rect = anchor.getBoundingClientRect();
+  const margin = 10;
+  const width = deleteConfirmPopover.offsetWidth;
+  const height = deleteConfirmPopover.offsetHeight;
+  const rightSide = rect.right + margin;
+  const leftSide = rect.left - width - margin;
+  const left = rightSide + width <= window.innerWidth - margin ? rightSide : Math.max(margin, leftSide);
+  const centeredTop = rect.top + (rect.height / 2) - (height / 2);
+  const top = Math.min(Math.max(margin, centeredTop), window.innerHeight - height - margin);
+  deleteConfirmPopover.style.left = `${left}px`;
+  deleteConfirmPopover.style.top = `${top}px`;
+}
+
+function confirmDeleteAction({ anchor, title, message, deleteLabel = "Delete" }) {
+  closeDeleteConfirmation(false);
+  if (!pageDim || !deleteConfirmPopover || !deleteConfirmTitle || !deleteConfirmMessage || !deleteConfirmDelete) {
+    const error = new Error("Delete confirmation markup is missing. Refresh the page and try again.");
+    logClientError("Delete confirmation could not open", error, {
+      missingMarkup: true,
+    });
+    status.textContent = error.message;
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    activeDeleteConfirmation = { resolve };
+    deleteConfirmTitle.textContent = title;
+    deleteConfirmMessage.textContent = message;
+    deleteConfirmDelete.textContent = deleteLabel;
+    pageDim.hidden = false;
+    deleteConfirmPopover.hidden = false;
+    positionDeleteConfirmation(anchor);
+    deleteConfirmDelete.focus();
+  });
+}
+
+deleteConfirmCancel?.addEventListener("click", () => closeDeleteConfirmation(false));
+deleteConfirmDelete?.addEventListener("click", () => closeDeleteConfirmation(true));
+pageDim?.addEventListener("click", () => closeDeleteConfirmation(false));
+
 function showContextMenu(item, x, y) {
   hideContextMenu();
   const actions = [];
@@ -1004,7 +1070,7 @@ function showContextMenu(item, x, y) {
 
   if (item && canEdit) {
     actions.push({ label: "Rename", action: (button) => { openRenamePopover(button, item); } });
-    actions.push({ label: "Delete", action: () => { deleteItem(item); }, className: "delete" });
+    actions.push({ label: "Delete", action: (button) => { deleteItem(item, button); }, className: "delete" });
   }
 
   if (!actions.length) {
@@ -1358,7 +1424,7 @@ function renderItems(data) {
         if (item.pendingUpload) {
           cancelPendingUploadPath(item.path);
         } else {
-          deleteItem(item);
+          deleteItem(item, removeButton);
         }
       });
       actions.append(removeButton);
@@ -1913,8 +1979,59 @@ async function deleteItemRequest(path) {
   return { ok: true };
 }
 
-async function deleteItem(item) {
-  if (confirmSingleDelete.checked && !window.confirm(`Delete ${item.name}?`)) {
+function selectedDeleteSummary(paths) {
+  return paths.reduce((summary, path) => {
+    const row = list.querySelector(`li[data-path="${CSS.escape(path)}"]`);
+    if (row?.dataset.type === "folder") {
+      summary.folders += 1;
+    } else {
+      summary.files += 1;
+    }
+    return summary;
+  }, { files: 0, folders: 0 });
+}
+
+async function confirmDeleteIfNeeded({ anchor, item, paths }) {
+  if (item) {
+    const isFolder = item.type === "folder";
+    if (!isFolder && confirmSingleDelete.checked) {
+      return true;
+    }
+    return confirmDeleteAction({
+      anchor,
+      title: `Delete ${isFolder ? "folder" : "file"}?`,
+      message: isFolder
+        ? `Delete folder "${item.name}" and everything inside it?`
+        : `Delete file "${item.name}"?`,
+      deleteLabel: `Delete ${isFolder ? "folder" : "file"}`,
+    });
+  }
+
+  const summary = selectedDeleteSummary(paths);
+  const hasFolders = summary.folders > 0;
+  const hasFiles = summary.files > 0;
+  if (!hasFolders && hasFiles && confirmBulkDelete.checked) {
+    return true;
+  }
+  const pieces = [];
+  if (summary.files) {
+    pieces.push(`${summary.files} file${summary.files === 1 ? "" : "s"}`);
+  }
+  if (summary.folders) {
+    pieces.push(`${summary.folders} folder${summary.folders === 1 ? "" : "s"}`);
+  }
+  return confirmDeleteAction({
+    anchor,
+    title: "Delete selected items?",
+    message: hasFolders
+      ? `Delete ${pieces.join(" and ")}? Folder contents will be deleted too.`
+      : `Delete ${pieces.join(" and ")}?`,
+    deleteLabel: "Delete selected",
+  });
+}
+
+async function deleteItem(item, anchor) {
+  if (!(await confirmDeleteIfNeeded({ anchor, item }))) {
     return;
   }
 
@@ -1933,14 +2050,14 @@ async function deleteItem(item) {
   await loadItems({ force: true });
 }
 
-async function deleteSelectedItems() {
+async function deleteSelectedItems(anchor) {
   const items = Array.from(selectedItems);
 
   if (!items.length) {
     return;
   }
 
-  if (confirmBulkDelete.checked && !window.confirm(`Delete ${items.length} selected item${items.length === 1 ? "" : "s"}?`)) {
+  if (!(await confirmDeleteIfNeeded({ anchor, paths: items }))) {
     return;
   }
 
@@ -2826,6 +2943,10 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
+    if (activeDeleteConfirmation) {
+      closeDeleteConfirmation(false);
+      return;
+    }
     closeUploadChoiceMenu();
     hideContextMenu();
     closeNotificationsPanel();

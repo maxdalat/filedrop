@@ -63,6 +63,12 @@ PRIVATE_KEY_PATH = Path(app.instance_path) / PRIVATE_KEY_FILENAME
 PUBLIC_KEY_PATH = Path(app.instance_path) / PUBLIC_KEY_FILENAME
 UPLOAD_ROOT = Path(env_value(UPLOAD_PATH_ENV, Path(app.root_path) / DEFAULT_UPLOAD_DIRECTORY)).resolve()
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+STATIC_ASSET_VERSION = str(
+    max(
+        (path.stat().st_mtime_ns for path in Path(app.static_folder).rglob("*") if path.is_file()),
+        default=0,
+    )
+)
 
 def utc_now():
     return datetime.now(timezone.utc)
@@ -97,7 +103,7 @@ def close_db(_error=None):
 
 @app.context_processor
 def inject_form_constraints():
-    return {"form_constraints": FORM_CONSTRAINTS}
+    return {"form_constraints": FORM_CONSTRAINTS, "static_asset_version": STATIC_ASSET_VERSION}
 
 
 def init_db():
@@ -136,8 +142,8 @@ def init_db():
             conflict_mode TEXT NOT NULL DEFAULT 'add' CHECK (conflict_mode IN ('add', 'replace')),
             parallel_uploads INTEGER NOT NULL DEFAULT {DEFAULT_PARALLEL_UPLOADS}
                 CHECK (parallel_uploads BETWEEN {MIN_PARALLEL_UPLOADS} AND {MAX_PARALLEL_UPLOADS}),
-            confirm_single_delete INTEGER NOT NULL DEFAULT 1,
-            confirm_bulk_delete INTEGER NOT NULL DEFAULT 1,
+            confirm_single_delete INTEGER NOT NULL DEFAULT 0,
+            confirm_bulk_delete INTEGER NOT NULL DEFAULT 0,
             full_view INTEGER NOT NULL DEFAULT 0,
             sort_by TEXT NOT NULL DEFAULT 'manual'
                 CHECK (sort_by IN ('manual', 'name', 'modified', 'size', 'extension')),
@@ -189,6 +195,10 @@ def init_db():
             (DEFAULT_PARALLEL_UPLOADS, MAX_PARALLEL_UPLOADS),
         )
         db.execute("INSERT INTO app_migrations (name) VALUES (?)", (parallel_upload_migration,))
+    file_delete_confirmation_migration = "file_delete_confirmations_default_off"
+    if not db.execute("SELECT 1 FROM app_migrations WHERE name = ?", (file_delete_confirmation_migration,)).fetchone():
+        db.execute("UPDATE user_preferences SET confirm_single_delete = 0, confirm_bulk_delete = 0")
+        db.execute("INSERT INTO app_migrations (name) VALUES (?)", (file_delete_confirmation_migration,))
     if not db.execute("SELECT 1 FROM users WHERE is_initial_admin = 1").fetchone():
         first_admin = db.execute("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").fetchone()
         if first_admin:
@@ -719,8 +729,8 @@ def render_share_browser(token, relative_path=""):
         "theme": "system",
         "conflictMode": "add",
         "parallelUploads": DEFAULT_PARALLEL_UPLOADS,
-        "confirmSingleDelete": True,
-        "confirmBulkDelete": True,
+        "confirmSingleDelete": False,
+        "confirmBulkDelete": False,
         "fullView": False,
         "sortBy": "manual",
         "sortDirection": "asc",
