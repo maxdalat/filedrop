@@ -5,28 +5,6 @@ const isShareMode = Boolean(shareContext?.token);
 const canEdit = !isShareMode || shareContext.canEdit === true;
 const rootLabel = document.body.dataset.rootLabel || "Files";
 
-function elementLabel(element) {
-  if (!element || element === window) {
-    return "window";
-  }
-  if (element === document) {
-    return "document";
-  }
-  const parts = [element.tagName?.toLowerCase()].filter(Boolean);
-  if (element.id) {
-    parts.push(`#${element.id}`);
-  }
-  if (element.classList?.length) {
-    parts.push(`.${Array.from(element.classList).join(".")}`);
-  }
-  if (element.getAttribute?.("aria-label")) {
-    parts.push(`[aria-label="${element.getAttribute("aria-label")}"]`);
-  } else if (element.textContent?.trim()) {
-    parts.push(`[text="${element.textContent.trim().slice(0, 80)}"]`);
-  }
-  return parts.join("");
-}
-
 function logClientError(message, error, context = {}) {
   const details = {
     path: document.body.dataset.currentPath || "",
@@ -55,52 +33,6 @@ window.addEventListener("error", (event) => {
 window.addEventListener("unhandledrejection", (event) => {
   logClientError("Unhandled promise rejection", event.reason || "Promise rejected without a reason.");
 });
-
-const originalAddEventListener = EventTarget.prototype.addEventListener;
-const wrappedListeners = new WeakMap();
-const loggedEventTypes = new Set(["click", "submit", "change", "input", "keydown", "drop"]);
-
-function contextForEvent(target, type, event) {
-  return {
-    eventType: type,
-    listenerTarget: elementLabel(target),
-    eventTarget: elementLabel(event?.target),
-  };
-}
-
-function wrappedEventListener(target, type, listener) {
-  if (!loggedEventTypes.has(type) || typeof listener !== "function") {
-    return listener;
-  }
-  let wrappersByType = wrappedListeners.get(listener);
-  if (!wrappersByType) {
-    wrappersByType = new Map();
-    wrappedListeners.set(listener, wrappersByType);
-  }
-  if (wrappersByType.has(type)) {
-    return wrappersByType.get(type);
-  }
-  const wrapper = function loggedUiAction(...args) {
-    try {
-      const result = listener.apply(this, args);
-      if (result && typeof result.catch === "function") {
-        result.catch((error) => {
-          logClientError("UI action failed", error, contextForEvent(target, type, args[0]));
-        });
-      }
-      return result;
-    } catch (error) {
-      logClientError("UI action failed", error, contextForEvent(target, type, args[0]));
-      throw error;
-    }
-  };
-  wrappersByType.set(type, wrapper);
-  return wrapper;
-}
-
-EventTarget.prototype.addEventListener = function addLoggedEventListener(type, listener, options) {
-  return originalAddEventListener.call(this, type, wrappedEventListener(this, type, listener), options);
-};
 
 const originalFetch = window.fetch.bind(window);
 window.fetch = async (resource, options = {}) => {
