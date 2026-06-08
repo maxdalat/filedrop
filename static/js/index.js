@@ -5,6 +5,10 @@ const isShareMode = Boolean(shareContext?.token);
 const canEdit = !isShareMode || shareContext.canEdit === true;
 const rootLabel = document.body.dataset.rootLabel || "Files";
 
+document.querySelectorAll("[data-avatar-color]").forEach((element) => {
+  element.style.background = element.dataset.avatarColor;
+});
+
 function logClientError(message, error, context = {}) {
   const details = {
     path: document.body.dataset.currentPath || "",
@@ -103,6 +107,8 @@ const uploadChoiceMenu = document.querySelector("#upload-choice-menu");
 const chooseFilesButton = document.querySelector("#choose-files-button");
 const folderInput = document.querySelector("#folder-input");
 const chooseFolderButton = document.querySelector("#choose-folder-button");
+const heroDropZone = document.querySelector("#hero-drop-zone");
+const heroUploadButton = document.querySelector("#hero-upload-button");
 const status = document.querySelector("#status");
 const uploadPanel = document.querySelector("#upload-panel");
 const uploadElapsed = document.querySelector("#upload-elapsed");
@@ -246,6 +252,10 @@ chooseFilesButton.addEventListener("click", () => {
 chooseFolderButton.addEventListener("click", () => {
   closeUploadChoiceMenu();
   folderInput.click();
+});
+
+heroUploadButton?.addEventListener("click", () => {
+  input.click();
 });
 
 function updateToastPosition() {
@@ -1056,7 +1066,10 @@ toggleUploadPanelButton.addEventListener("click", () => {
 function updateBreadcrumbs() {
   breadcrumbs.innerHTML = "";
   const segments = currentPath ? currentPath.split("/") : [];
-  const crumbs = [{ label: rootLabel, path: "" }];
+  const crumbs = [{ label: "Home", path: "" }];
+  if (rootLabel && !isShareMode) {
+    crumbs.push({ label: rootLabel, path: "" });
+  }
 
   segments.forEach((segment, index) => {
     crumbs.push({ label: segment, path: segments.slice(0, index + 1).join("/") });
@@ -1066,7 +1079,7 @@ function updateBreadcrumbs() {
     if (index) {
       const separator = document.createElement("span");
       separator.className = "breadcrumb-separator";
-      separator.textContent = "/";
+      separator.textContent = "›";
       breadcrumbs.append(separator);
     }
 
@@ -1196,28 +1209,43 @@ deleteConfirmCancel?.addEventListener("click", () => closeDeleteConfirmation(fal
 deleteConfirmDelete?.addEventListener("click", () => closeDeleteConfirmation(true));
 pageDim?.addEventListener("click", () => closeDeleteConfirmation(false));
 
+function menuIcon(name) {
+  const icons = {
+    copy: '<path d="M10 13a5 5 0 0 1 0-7l1.2-1.2a5 5 0 0 1 7 7L17 13"></path><path d="M14 11a5 5 0 0 1 0 7l-1.2 1.2a5 5 0 0 1-7-7L7 11"></path>',
+    delete: '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="m6 6 1 15h10l1-15"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>',
+    download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
+    folder: '<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path>',
+    move: '<path d="M5 9V5h4"></path><path d="M19 9V5h-4"></path><path d="M5 15v4h4"></path><path d="M19 15v4h-4"></path><path d="M5 5l5 5"></path><path d="m14 10 5-5"></path><path d="m5 19 5-5"></path><path d="m14 14 5 5"></path>',
+    open: '<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path><path d="m10 14 4-4"></path><path d="M10 10h4v4"></path>',
+    rename: '<path d="M12 20h9"></path><path d="m16.5 3.5 4 4L8 20H4v-4z"></path>',
+    trash: '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="m6 6 1 15h10l1-15"></path>',
+  };
+  return `<svg class="ui-icon menu-icon" aria-hidden="true" viewBox="0 0 24 24">${icons[name] || icons.folder}</svg>`;
+}
+
 function showContextMenu(item, x, y) {
   hideContextMenu();
   const actions = [];
   const selectedCount = selectedItems.size;
 
   if (currentMode === "trash") {
-    actions.push({ label: "Empty Trash", action: (button) => emptyTrash(button), className: "delete" });
+    actions.push({ label: "Empty Trash", icon: "trash", action: (button) => emptyTrash(button), className: "delete" });
   }
 
-  if (canEdit && currentMode === "all") {
+  if (!item && canEdit && currentMode === "all") {
     if (selectedCount) {
-      actions.push({ label: `New folder (${selectedCount})`, action: (button) => { openFolderPopover(button, true); } });
+      actions.push({ label: `New folder (${selectedCount})`, icon: "folder", action: (button) => { openFolderPopover(button, true); } });
     } else {
-      actions.push({ label: "New folder", action: (button) => { openFolderPopover(button, false); } });
+      actions.push({ label: "New folder", icon: "folder", action: (button) => { openFolderPopover(button, false); } });
     }
   }
 
   if (item?.type === "folder" && currentMode !== "trash") {
-    actions.push({ label: "Open", action: () => { navigateToFolder(item.path); } });
+    actions.push({ label: "Open", icon: "open", action: () => { navigateToFolder(item.path); } });
   } else if (item?.type === "file" && currentMode !== "trash") {
     actions.push({
       label: "Download",
+      icon: "download",
       action: () => {
         showToast(`Download started for ${item.name}.`);
         window.location.assign(fileUrl(item.path));
@@ -1226,16 +1254,33 @@ function showContextMenu(item, x, y) {
   }
 
   if (item && canEdit && currentMode !== "trash") {
+    actions.push({ label: "Rename", icon: "rename", action: (button) => { openRenamePopover(button, item); } });
     actions.push({
-      label: item.favorite ? "Remove favorite" : "Add favorite",
-      action: () => { setFavorite(item.path, !item.favorite); },
+      label: "Move",
+      icon: "move",
+      action: () => {
+        status.textContent = "Drag the item onto a folder to move it.";
+      },
     });
-    actions.push({ label: "Rename", action: (button) => { openRenamePopover(button, item); } });
+    actions.push({
+      label: "Copy link",
+      icon: "copy",
+      action: async () => {
+        const url = item.type === "file" ? new URL(fileUrl(item.path), window.location.href) : new URL(folderUrl(item.path), window.location.href);
+        try {
+          await navigator.clipboard.writeText(url.href);
+          status.textContent = "Copied link.";
+        } catch {
+          status.textContent = url.href;
+        }
+      },
+    });
     actions.push({
       label: "Delete",
+      icon: "delete",
       action: (button) => { deleteItem(item, button); },
       preload: () => prepareDeletePreview([item.path]),
-      className: "delete",
+      className: "delete is-separated",
     });
   }
 
@@ -1246,8 +1291,11 @@ function showContextMenu(item, x, y) {
   actions.forEach((action) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = action.label;
     button.className = action.className || "";
+    button.innerHTML = menuIcon(action.icon);
+    const label = document.createElement("span");
+    label.textContent = action.label;
+    button.append(label);
     if (action.preload) {
       button.addEventListener("mouseenter", action.preload);
       button.addEventListener("focus", action.preload);
@@ -1619,7 +1667,13 @@ function updateFolderHeader(data = {}) {
     folderMeta.textContent = `${items.length} deleted item${items.length === 1 ? "" : "s"} · ${formatBytes(data.usageBytes)} in trash`;
     return;
   }
-  folderMeta.textContent = `${folders} folder${folders === 1 ? "" : "s"} · ${files} file${files === 1 ? "" : "s"}`;
+  const owner = isShareMode ? rootLabel : `Owned by ${rootLabel}`;
+  const size = items
+    .filter((item) => item.type === "file" && item.size !== null && item.size !== undefined)
+    .reduce((total, item) => total + item.size, 0);
+  const count = `${files} file${files === 1 ? "" : "s"}`;
+  const folderCount = folders ? `${folders} folder${folders === 1 ? "" : "s"} · ` : "";
+  folderMeta.textContent = `${owner} · ${folderCount}${count} · ${formatBytes(size)}`;
 }
 
 function setMode(mode, path = "") {
@@ -1664,7 +1718,7 @@ function renderSidebarFolders(folders) {
     button.className = "sidebar-folder";
     button.draggable = true;
     button.dataset.path = folder.path;
-    button.innerHTML = `<span class="sidebar-folder-icon" aria-hidden="true"></span><span></span>`;
+    button.innerHTML = `<span class="sidebar-folder-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path></svg></span><span></span>`;
     button.querySelector("span:last-child").textContent = folder.name;
     button.addEventListener("click", () => setMode("all", folder.path));
     button.addEventListener("mouseenter", () => preloadFolderForNavigation(folder.path));
@@ -1836,7 +1890,7 @@ function replacePendingUploadRow(entry, item) {
   name.textContent = item.name;
   label.className = "item-label";
   label.append(name);
-  const detailText = sortDetail(item);
+  const detailText = itemDetailText(item);
   if (detailText) {
     const detail = document.createElement("span");
     detail.className = "item-sort-detail";
@@ -1845,29 +1899,8 @@ function replacePendingUploadRow(entry, item) {
   }
 
   actions.className = "item-actions";
-  downloadLink.className = "item-action-link";
-  downloadLink.href = fileUrl(item.path);
-  downloadLink.textContent = "Download";
-  downloadLink.addEventListener("click", (event) => {
-    event.stopPropagation();
-    showToast(`Download started for ${item.name}.`);
-  });
-  actions.append(downloadLink);
-
-  if (canEdit) {
-    removeButton.type = "button";
-    removeButton.className = "item-action-button delete";
-    removeButton.textContent = "×";
-    removeButton.setAttribute("aria-label", `Delete ${item.name}`);
-    removeButton.addEventListener("mouseenter", () => prepareDeletePreview([item.path]));
-    removeButton.addEventListener("focus", () => prepareDeletePreview([item.path]));
-    removeButton.addEventListener("pointerdown", () => prepareDeletePreview([item.path]));
-    removeButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      deleteItem(item, removeButton);
-    });
-    actions.append(removeButton);
-  }
+  const moreButton = rowMoreButton(item);
+  actions.append(moreButton);
 
   nextRow.addEventListener("click", (event) => {
     if (event.target.closest(".item-action-button, .item-action-link")) {
@@ -1974,7 +2007,7 @@ function renderItems(data) {
     name.textContent = item.name;
     label.className = "item-label";
     label.append(name);
-    const detailText = item.pendingUpload ? "Pending upload" : sortDetail(item);
+    const detailText = item.pendingUpload ? "Pending upload" : itemDetailText(item);
     if (detailText) {
       const detail = document.createElement("span");
       detail.className = "item-sort-detail";
@@ -1985,31 +2018,6 @@ function renderItems(data) {
     actions.className = "item-actions";
 
     if (item.type === "folder") {
-      const openButton = document.createElement("button");
-      openButton.type = "button";
-      openButton.className = "item-action-button open";
-      openButton.textContent = "Open";
-      openButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        navigateToFolder(item.path);
-      });
-      openButton.addEventListener("mouseenter", () => {
-        if (!item.pendingUpload) {
-          preloadFolderForNavigation(item.path);
-        }
-      });
-      openButton.addEventListener("focus", () => {
-        if (!item.pendingUpload) {
-          preloadFolderForNavigation(item.path);
-        }
-      });
-      openButton.addEventListener("pointerdown", () => {
-        if (!item.pendingUpload) {
-          preloadFolderForNavigation(item.path);
-        }
-      });
-      actions.append(openButton);
-
       if (!item.pendingUpload) {
         row.addEventListener("mouseenter", () => {
           preloadFolderForHover(item.path);
@@ -2020,32 +2028,9 @@ function renderItems(data) {
         });
       }
 
-    } else if (!item.pendingUpload) {
-      const downloadLink = document.createElement("a");
-      downloadLink.className = "item-action-link";
-      downloadLink.href = fileUrl(item.path);
-      downloadLink.textContent = "Download";
-      downloadLink.addEventListener("click", (event) => {
-        event.stopPropagation();
-        showToast(`Download started for ${item.name}.`);
-      });
-      actions.append(downloadLink);
     }
 
-    if (canEdit && currentMode !== "trash") {
-      const favoriteButton = document.createElement("button");
-      favoriteButton.type = "button";
-      favoriteButton.className = "item-action-button favorite";
-      favoriteButton.textContent = item.favorite ? "★" : "☆";
-      favoriteButton.setAttribute("aria-label", `${item.favorite ? "Remove" : "Add"} ${item.name} ${item.favorite ? "from" : "to"} favorites`);
-      favoriteButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        setFavorite(item.path, !item.favorite);
-      });
-      actions.append(favoriteButton);
-    }
-
-    if (canEdit && currentMode !== "trash") {
+    if (item.pendingUpload && canEdit && currentMode !== "trash") {
       const removeButton = document.createElement("button");
       removeButton.type = "button";
       removeButton.className = "item-action-button delete";
@@ -2065,6 +2050,8 @@ function renderItems(data) {
         }
       });
       actions.append(removeButton);
+    } else {
+      actions.append(rowMoreButton(item));
     }
 
     row.addEventListener("click", (event) => {
@@ -2220,6 +2207,56 @@ function sortDetail(item) {
     return `.${item.extension}`;
   }
   return "";
+}
+
+function relativeModifiedLabel(item) {
+  if (item.modifiedAt === null || item.modifiedAt === undefined) {
+    return "";
+  }
+  const modified = new Date(item.modifiedAt * 1000);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfModified = new Date(modified.getFullYear(), modified.getMonth(), modified.getDate()).getTime();
+  const dayDifference = Math.round((startOfToday - startOfModified) / 86400000);
+  const time = modified.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (dayDifference === 0) {
+    return `Today at ${time}`;
+  }
+  if (dayDifference === 1) {
+    return `Yesterday at ${time}`;
+  }
+  return `${modified.toLocaleDateString([], { month: "short", day: "numeric", year: modified.getFullYear() === now.getFullYear() ? undefined : "numeric" })} at ${time}`;
+}
+
+function itemDetailText(item) {
+  const parts = [];
+  const modified = relativeModifiedLabel(item);
+  if (modified) {
+    parts.push(modified);
+  }
+  if (item.type === "file" && item.size !== null && item.size !== undefined) {
+    parts.push(formatBytes(item.size));
+  } else if (item.type === "folder") {
+    parts.push("Folder");
+  }
+  return parts.join("  •  ");
+}
+
+function rowMoreButton(item) {
+  const moreButton = document.createElement("button");
+  moreButton.type = "button";
+  moreButton.className = "item-action-button more";
+  moreButton.innerHTML = '<svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"></circle><circle cx="12" cy="12" r="1.5"></circle><circle cx="19" cy="12" r="1.5"></circle></svg>';
+  moreButton.setAttribute("aria-label", `More actions for ${item.name}`);
+  moreButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!selectedItems.has(item.path)) {
+      setSelectedItems(new Set([item.path]), item.path);
+    }
+    const rect = moreButton.getBoundingClientRect();
+    showContextMenu(item, rect.right - 8, rect.bottom + 8);
+  });
+  return moreButton;
 }
 
 function previewUrl(path) {
@@ -3580,6 +3617,9 @@ folderInput.addEventListener("change", () => {
 
 if (canEdit) {
   addFolderDropTarget(list, () => currentPath);
+  if (heroDropZone) {
+    addFolderDropTarget(heroDropZone, () => currentPath);
+  }
 }
 
 let autoScrollFrame;

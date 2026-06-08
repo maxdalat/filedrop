@@ -535,7 +535,7 @@ def storage_usage_for_user(user):
 
 
 def user_id_value(user):
-    return user["id"] if "id" in user.keys() else user["user_id"]
+    return user["user_id"] if "user_id" in user.keys() else user["id"]
 
 
 def user_preferences_for_user(user):

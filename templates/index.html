@@ -17,10 +17,12 @@
           {% if user and not share %}
           <div class="file-search">
             <button class="search-toggle" type="button" id="search-toggle" aria-label="Search files" aria-expanded="false" aria-controls="search-panel">
-              <span aria-hidden="true">&#128269;</span>
+              <svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
             </button>
             <div class="search-panel" id="search-panel" hidden>
-              <input id="search-input" type="search" autocomplete="off" placeholder="Search files">
+              <svg class="ui-icon search-field-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+              <input id="search-input" type="search" autocomplete="off" placeholder="Search files...">
+              <span class="search-shortcut" aria-hidden="true">⌘ K</span>
               <div class="search-results" id="search-results"></div>
             </div>
           </div>
@@ -28,7 +30,7 @@
           {% if user %}
           <div class="notifications">
             <button class="notifications-toggle" type="button" id="notifications-toggle" aria-label="Notifications" aria-expanded="false" aria-controls="notifications-panel">
-              <span aria-hidden="true">!</span>
+              <svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg>
               <span class="notification-badge" id="notification-badge" hidden>0</span>
             </button>
             <div class="notifications-panel" id="notifications-panel" hidden>
@@ -40,8 +42,9 @@
           {% if user %}
           <div class="account">
             <button class="account-toggle" type="button" id="account-toggle" aria-label="Account menu" aria-expanded="false" aria-controls="account-panel">
-              <span class="avatar" style="background: {{ user.avatar_color }}">{{ user.username[0]|upper }}</span>
+              <span class="avatar" data-avatar-color="{{ user.avatar_color }}">{{ user.username[0]|upper }}</span>
               <span>{{ user.username }}</span>
+              <span class="account-caret" aria-hidden="true">⌄</span>
             </button>
             <div class="account-panel" id="account-panel" hidden>
               {% if user.role == "admin" %}<a href="{{ url_for('admin') }}">Manage accounts</a>{% endif %}
@@ -56,7 +59,7 @@
           <a class="sign-in-link" href="{{ url_for('login') }}">Sign in</a>
           {% endif %}
           <div class="settings">
-            <button class="settings-toggle" type="button" id="settings-toggle" aria-label="Settings" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
+            <button class="settings-toggle" type="button" id="settings-toggle" aria-label="Settings" aria-expanded="false" aria-controls="settings-panel"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"></circle><circle cx="12" cy="12" r="1.5"></circle><circle cx="19" cy="12" r="1.5"></circle></svg></button>
             <div class="settings-panel" id="settings-panel" hidden>
               <div class="settings-heading">Preferences</div>
               <div class="setting-group">
@@ -115,23 +118,23 @@
       <aside class="sidebar" aria-label="File sections">
         <nav class="sidebar-primary" id="sidebar-primary">
           <button class="sidebar-mode is-active" type="button" data-mode="all" data-path="">
-            <span class="sidebar-icon" aria-hidden="true">□</span>
+            <span class="sidebar-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path></svg></span>
             <span>All Files</span>
           </button>
           <button class="sidebar-mode" type="button" data-mode="recents">
-            <span class="sidebar-icon" aria-hidden="true">◷</span>
+            <span class="sidebar-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></span>
             <span>Recents</span>
           </button>
           <button class="sidebar-mode" type="button" data-mode="shared">
-            <span class="sidebar-icon" aria-hidden="true">⌘</span>
+            <span class="sidebar-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="m8.7 10.7 6.6-4.4"></path><path d="m8.7 13.3 6.6 4.4"></path></svg></span>
             <span>Shared</span>
           </button>
           <button class="sidebar-mode" type="button" data-mode="favorites">
-            <span class="sidebar-icon" aria-hidden="true">☆</span>
+            <span class="sidebar-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"></path></svg></span>
             <span>Favorites</span>
           </button>
           <button class="sidebar-mode" type="button" data-mode="trash" id="trash-sidebar-button">
-            <span class="sidebar-icon" aria-hidden="true">⌫</span>
+            <span class="sidebar-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="m6 6 1 15h10l1-15"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></span>
             <span>Trash</span>
           </button>
         </nav>
@@ -151,7 +154,7 @@
           <div class="storage-meter-track">
             <div class="storage-meter-fill" id="storage-meter-fill"></div>
           </div>
-          <button class="manage-storage-button" type="button" id="manage-storage-button">Manage Storage</button>
+          <button class="manage-storage-button" type="button" id="manage-storage-button"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="7" ry="3"></ellipse><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5"></path><path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg><span>Manage Storage</span></button>
         </aside>
         {% endif %}
       </aside>
@@ -200,7 +203,10 @@
         </div>
         <div class="folder-toolbar-actions">
           <form class="upload-form" id="upload-form">
-            <button class="choose-files-button" id="choose-upload-button" type="button" aria-expanded="false" aria-controls="upload-choice-menu">Upload</button>
+            <button class="choose-files-button" id="choose-upload-button" type="button" aria-expanded="false" aria-controls="upload-choice-menu">
+              <svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 16V4"></path><path d="m7 9 5-5 5 5"></path><path d="M20 16.5V19a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2.5"></path></svg>
+              <span>Upload Files</span>
+            </button>
             <div class="upload-choice-menu" id="upload-choice-menu" hidden>
               <button type="button" id="choose-files-button">Files</button>
               <button type="button" id="choose-folder-button">Folder</button>
@@ -210,7 +216,7 @@
           </form>
           {% if user and not share %}
           <div class="share">
-            <button class="more-toggle" type="button" id="share-toggle" aria-label="More folder actions" aria-expanded="false" aria-controls="share-panel">•••</button>
+            <button class="more-toggle" type="button" id="share-toggle" aria-label="More folder actions" aria-expanded="false" aria-controls="share-panel"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"></circle><circle cx="12" cy="12" r="1.5"></circle><circle cx="19" cy="12" r="1.5"></circle></svg></button>
             <div class="share-panel" id="share-panel" hidden>
               <div class="settings-heading">Folder Actions</div>
               <button class="menu-action-button" type="button" id="favorite-current-button">Add to favorites</button>
@@ -232,22 +238,35 @@
           </div>
           {% endif %}
         </div>
+        {% if not share or share.canEdit %}
+        <div class="hero-drop-zone" id="hero-drop-zone">
+          <div class="hero-drop-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="M16 16v-4a4 4 0 0 0-8 0v4"></path><path d="M12 12v9"></path><path d="m8 16 4-4 4 4"></path><path d="M20 17.5A4.5 4.5 0 0 0 17.3 9 6 6 0 0 0 6.1 7.8 5 5 0 0 0 6 18h1"></path></svg></div>
+          <div>
+            <div class="hero-drop-title">Drag and drop files here</div>
+            <div class="hero-drop-or">or</div>
+            <button class="hero-upload-button" type="button" id="hero-upload-button">Upload Files</button>
+          </div>
+        </div>
+        {% endif %}
       </div>
 
       <div class="file-toolbar" id="file-toolbar">
         <label class="select-all-control" for="select-all-checkbox">
           <input type="checkbox" id="select-all-checkbox" disabled>
-          <span>Select all</span>
+          <span id="selection-count">0 selected</span>
         </label>
         <div class="file-toolbar-actions">
           <div class="sort-controls" aria-label="Sort files">
-            <span class="sort-label">Sort</span>
+            <span class="sort-label">Sort by:</span>
             <button class="sort-button" type="button" data-sort="name" data-label="Name">Name</button>
             <button class="sort-button" type="button" data-sort="modified" data-label="Date &amp; time">Date &amp; time</button>
             <button class="sort-button" type="button" data-sort="size" data-label="Size">Size</button>
             <button class="sort-button" type="button" data-sort="extension" data-label="Extension">Extension</button>
           </div>
-          <span class="selection-count" id="selection-count">0 selected</span>
+          <div class="view-toggle" aria-label="View mode">
+            <button class="view-toggle-button is-active" type="button" aria-label="List view">☷</button>
+            <button class="view-toggle-button" type="button" aria-label="Grid view">▦</button>
+          </div>
           <button class="delete-selected-button" type="button" id="delete-selected-button" disabled>Delete selected</button>
         </div>
       </div>
@@ -282,9 +301,14 @@
       </section>
     </main>
 
-    <script>window.FILEDROP_PREFERENCES = {{ preferences|tojson }};</script>
-    <script>window.FILEDROP_SHARE_CONTEXT = {{ share|tojson }};</script>
-    <script>window.FILEDROP_STORAGE = {{ storage|tojson }};</script>
+    <script id="filedrop-preferences-data" type="application/json">{{ preferences|tojson }}</script>
+    <script id="filedrop-share-context-data" type="application/json">{{ share|tojson }}</script>
+    <script id="filedrop-storage-data" type="application/json">{{ storage|tojson }}</script>
+    <script>
+      window.FILEDROP_PREFERENCES = JSON.parse(document.querySelector("#filedrop-preferences-data").textContent);
+      window.FILEDROP_SHARE_CONTEXT = JSON.parse(document.querySelector("#filedrop-share-context-data").textContent);
+      window.FILEDROP_STORAGE = JSON.parse(document.querySelector("#filedrop-storage-data").textContent);
+    </script>
     <script src="{{ url_for('static', filename='js/config.js', v=static_asset_version) }}" defer></script>
     <script src="{{ url_for('static', filename='js/index.js', v=static_asset_version) }}" defer></script>
   </body>
